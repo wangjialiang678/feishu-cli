@@ -10,7 +10,8 @@
     "download": "node scripts/download.js",
     "fetch": "node scripts/fetch.js",
     "list": "node scripts/list.js",
-    "convert": "node scripts/convert.js"
+    "convert": "node scripts/convert.js",
+    "search": "node scripts/search.js"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.56.1"

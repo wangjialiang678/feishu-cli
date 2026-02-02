@@ -153,6 +153,25 @@ npm run list
 
 需要在 config.json 中配置 `wikiSpaceId`。
 
+### 搜索飞书文档
+
+```bash
+npm run search -- <关键词> [--type docx|doc|sheet|bitable|folder]
+# 或
+node scripts/search.js <关键词> [--type docx|doc|sheet|bitable|folder]
+```
+
+按关键词搜索用户有权限访问的飞书文档，返回标题、类型和 URL。
+
+- 支持 `--type` 过滤文档类型（多个类型用逗号分隔）
+- 默认返回前 20 个结果
+
+示例：
+```bash
+npm run search -- FAQ
+npm run search -- 周报 --type docx
+```
+
 ### 离线格式转换
 
 ```bash
@@ -299,6 +318,14 @@ cd ~/projects/feishu-cli && npm run convert to-md <json文件>
 cd ~/projects/feishu-cli && npm run convert to-feishu <md文件>
 ```
 
+### 搜索飞书文档
+
+```bash
+cd ~/projects/feishu-cli && node scripts/search.js <关键词> [--type docx|sheet|bitable]
+```
+
+按关键词搜索用户有权限访问的飞书文档，返回标题、类型和 URL。
+
 ### 列出 Wiki 文档
 
 ```bash
@@ -319,6 +346,8 @@ cd ~/projects/feishu-cli && npm run fetch -- <飞书文档URL或ID>
 - "上传 report.md 到飞书"
 - "下载这个飞书文档 https://feishu.cn/docx/xxx"
 - "读一下这个飞书文档的内容"
+- "在飞书上搜索关于 XX 的文档"
+- "帮我找飞书里包含 YY 的文档"
 
 ## 注意事项
 
