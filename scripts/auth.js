@@ -169,8 +169,15 @@ async function main() {
   const tokenPath = resolvePath(requireConfigValue(config, 'tokenPath'));
 
   const server = createServer();
-  server.listen(PORT, () => {
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use. Is another auth process running?`);
+    } else {
+      console.error(`Server error: ${err.message}`);
+    }
+    process.exit(1);
   });
+  server.listen(PORT);
 
   const shutdown = (signal) => {
     if (shuttingDown) return;
@@ -204,14 +211,14 @@ async function main() {
           refreshToken,
         });
       } else {
-      const result = await waitForAuthCode(clientId);
-      if (result.error) {
-        if (result.error === 'shutdown') {
-          break;
+        const result = await waitForAuthCode(clientId);
+        if (result.error) {
+          if (result.error === 'shutdown') {
+            break;
+          }
+          console.log('Authorization was denied. Try again.');
+          continue;
         }
-        console.log('Authorization was denied. Try again.');
-        continue;
-      }
 
         tokenData = await exchangeCodeForToken({
           clientId,

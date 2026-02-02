@@ -647,6 +647,23 @@ export function markdownToBlocks(markdown) {
       continue;
     }
 
+    const todoMatch = trimmed.match(/^[-*+]\s+\[([ xX])\]\s+(.*)$/);
+    if (todoMatch) {
+      flushParagraph();
+      const done = todoMatch[1] !== ' ';
+      const todoContent = todoMatch[2] || '';
+      blocks.push(
+        createBlockPayload({
+          type: BLOCK_TYPE.todo,
+          key: 'todo',
+          elements: parseInlineMarkdown(todoContent.trim()),
+          extra: { style: { done } },
+        })
+      );
+      i += 1;
+      continue;
+    }
+
     const listMatch = line.match(/^(\s*)([-*+]\s+|\d+\.\s+)(.*)$/);
     if (listMatch) {
       flushParagraph();
@@ -830,7 +847,7 @@ function createBlock({
     block_id: id,
     parent_id: parentId,
     block_type: type,
-    children: children.length ? children : undefined,
+    children: children.length ? children : [],
   };
 
   if (key) {

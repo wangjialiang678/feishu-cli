@@ -6,6 +6,8 @@
 
 - **上传** — 本地 Markdown 文件 → 飞书文档（支持标题、段落、列表、代码块、引用、待办、表格、分割线、内联格式）
 - **下载** — 飞书文档 → 本地 Markdown 文件
+- **读取** — 飞书文档内容直接输出为 Markdown（不写本地文件）
+- **搜索** — 按关键词搜索飞书文档，支持类型过滤
 - **离线转换** — Markdown ↔ 飞书 Block JSON 互转
 - **列出文档** — 列出 Wiki 空间文档树
 - **查看元数据** — 获取文档 ID、标题、版本号
@@ -137,6 +139,20 @@ npm run download -- https://feishu.cn/docx/xxxxx
 npm run download -- xxxxx
 ```
 
+### 读取飞书文档内容
+
+```bash
+node scripts/read.js <飞书文档URL或ID>
+```
+
+将飞书文档内容以 Markdown 格式直接输出到 stdout，不创建本地文件。适用于只需读取内容的场景（如总结、问答、管道处理）。
+
+示例：
+```bash
+node scripts/read.js https://feishu.cn/docx/xxxxx
+node scripts/read.js xxxxx | head -20
+```
+
 ### 查看文档元数据
 
 ```bash
@@ -219,13 +235,20 @@ feishu-cli/
 │   ├── feishu.js          # 飞书 API 封装（文档 CRUD、Wiki 操作）
 │   ├── feishu-md.js       # Markdown ↔ 飞书 Block JSON 转换器
 │   └── helpers.js         # Token 读取、文件名清理等工具函数
-└── scripts/
-    ├── auth.js            # OAuth 2.0 授权 + token 自动刷新
-    ├── upload.js           # 上传 Markdown → 飞书文档
-    ├── download.js        # 下载飞书文档 → Markdown
-    ├── fetch.js           # 查看文档元数据 + Block JSON
-    ├── list.js            # 列出 Wiki 空间文档
-    └── convert.js         # 离线 Markdown ↔ Block JSON 转换
+├── scripts/
+│   ├── auth.js            # OAuth 2.0 授权 + token 自动刷新
+│   ├── upload.js          # 上传 Markdown → 飞书文档
+│   ├── download.js        # 下载飞书文档 → Markdown
+│   ├── read.js            # 读取飞书文档内容输出 Markdown（不写文件）
+│   ├── search.js          # 按关键词搜索飞书文档
+│   ├── fetch.js           # 查看文档元数据 + Block JSON
+│   ├── list.js            # 列出 Wiki 空间文档
+│   └── convert.js         # 离线 Markdown ↔ Block JSON 转换
+├── test/
+│   └── feishu-md.test.js  # Markdown ↔ Block JSON 转换单元测试
+└── docs/
+    ├── technical.md       # 技术架构文档
+    └── comparison-with-feishufs.md  # 与 FeishuFS 项目对比
 ```
 
 ---
@@ -275,12 +298,12 @@ feishu-cli/
 
 如果你使用 Claude Code，可以基于本项目自动创建 feishu-doc skill。
 
-将以下内容保存到 `~/.claude/skills/feishu-doc/skill.md`：
+将以下内容保存到 `~/.claude/skills/feishu-doc/SKILL.md`：
 
 ````markdown
 ---
 name: feishu-doc
-description: 飞书文档 CLI 工具。上传本地 Markdown 到飞书文档、下载飞书文档到本地。当用户提到"飞书"、"feishu"、"lark"、上传/下载飞书文档时自动触发。
+description: 飞书文档 CLI 工具。上传本地 Markdown 到飞书文档、读取/下载飞书文档。当用户提到"飞书"、"feishu"、"lark"、读取/上传/下载飞书文档时自动触发。
 ---
 
 # 飞书文档 CLI (feishu-cli)
@@ -303,13 +326,29 @@ cd ~/projects/feishu-cli && node scripts/upload.js <文件路径>
 
 以用户身份创建文档，支持标题、段落、列表、代码块、引用、待办、分割线、表格、内联格式。输出文档 URL。
 
+### 读取飞书文档内容（推荐）
+
+```bash
+cd ~/projects/feishu-cli && node scripts/read.js <飞书文档URL或ID>
+```
+
+直接将文档内容以 Markdown 格式输出到终端，不写本地文件。适用于总结、问答等只需读取内容的场景。
+
 ### 下载飞书文档到本地
 
 ```bash
 cd ~/projects/feishu-cli && node scripts/download.js <飞书文档URL或ID>
 ```
 
-将飞书文档转为 Markdown 保存到当前目录。
+将飞书文档转为 Markdown 保存到当前目录。仅在需要本地文件时使用（如编辑后重新上传）。
+
+### 搜索飞书文档
+
+```bash
+cd ~/projects/feishu-cli && node scripts/search.js <关键词> [--type docx|doc|sheet|bitable|folder]
+```
+
+按关键词搜索用户有权限访问的飞书文档，返回标题、类型和 URL。
 
 ### 离线格式转换
 
@@ -317,14 +356,6 @@ cd ~/projects/feishu-cli && node scripts/download.js <飞书文档URL或ID>
 cd ~/projects/feishu-cli && npm run convert to-md <json文件>
 cd ~/projects/feishu-cli && npm run convert to-feishu <md文件>
 ```
-
-### 搜索飞书文档
-
-```bash
-cd ~/projects/feishu-cli && node scripts/search.js <关键词> [--type docx|sheet|bitable]
-```
-
-按关键词搜索用户有权限访问的飞书文档，返回标题、类型和 URL。
 
 ### 列出 Wiki 文档
 
@@ -345,7 +376,8 @@ cd ~/projects/feishu-cli && npm run fetch -- <飞书文档URL或ID>
 - "把这个 Markdown 上传到飞书"
 - "上传 report.md 到飞书"
 - "下载这个飞书文档 https://feishu.cn/docx/xxx"
-- "读一下这个飞书文档的内容"
+- "读一下这个飞书文档的内容"（使用 read.js）
+- "总结一下这个飞书文档"（使用 read.js）
 - "在飞书上搜索关于 XX 的文档"
 - "帮我找飞书里包含 YY 的文档"
 
@@ -355,6 +387,7 @@ cd ~/projects/feishu-cli && npm run fetch -- <飞书文档URL或ID>
 - 图片暂不支持
 - 含特殊 Unicode 字符的代码块可能上传失败，会被自动跳过
 - 如果提示 token 过期或认证失败，提示用户运行 `cd ~/projects/feishu-cli && npm run auth`
+- 详细部署和配置说明见 `~/projects/feishu-cli/README.md`
 ````
 
 ### 快速生成 skill
@@ -369,6 +402,23 @@ Claude Code 会自动创建 skill 文件。
 
 ---
 
+## 运行测试
+
+```bash
+npm test
+```
+
+使用 Node.js 内置测试框架，覆盖 Markdown ↔ Block JSON 双向转换、内联格式解析、边界情况处理。
+
+---
+
+## 相关文档
+
+- [技术架构文档](docs/technical.md) — API 集成、格式转换引擎、错误处理策略
+- [与 FeishuFS 对比](docs/comparison-with-feishufs.md) — 两个项目的定位与方案差异
+
+---
+
 ## 致谢
 
-核心 API 封装和 Markdown 转换器基于 [FeishuFS](https://github.com/) 项目。
+核心 API 封装和 Markdown 转换器基于 [FeishuFS](https://github.com/wangjialiang678/FeishuFS) 项目精简而来。feishu-cli 去掉了同步引擎，专注于单次操作的 CLI 体验。

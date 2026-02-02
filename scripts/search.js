@@ -1,20 +1,9 @@
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
 import { readToken } from '../api/helpers.js';
+import { apiPost } from '../api/feishu.js';
 
-const API_BASE = 'https://open.feishu.cn/open-apis';
-
-async function apiPost(path, token, body) {
-  const resp = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await resp.json();
-  if (data.code !== 0) {
-    throw new Error(`API error (${data.code}): ${data.msg}`);
-  }
-  return data.data;
-}
+const ERR_SEARCH_NO_PERMISSION = '99991672';
+const ERR_SEARCH_NOT_ENABLED = '99991663';
 
 async function main() {
   const config = await readConfig();
@@ -45,7 +34,7 @@ async function main() {
   }
 
   try {
-    const data = await apiPost('/suite/docs-api/search/object', token, body);
+    const data = await apiPost('/suite/docs-api/search/object', token, body) || {};
     const docs = data.docs_entities || [];
 
     if (!docs.length) {
@@ -70,7 +59,7 @@ async function main() {
     }
   } catch (err) {
     // Fallback: try newer API
-    if (err.message.includes('99991672') || err.message.includes('99991663')) {
+    if (err.message.includes(ERR_SEARCH_NO_PERMISSION) || err.message.includes(ERR_SEARCH_NOT_ENABLED)) {
       console.error('搜索权限不足，请确认应用已开通 search 相关权限');
     } else {
       throw err;

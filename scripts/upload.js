@@ -1,40 +1,44 @@
 import fs from 'node:fs/promises';
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
 import { readToken } from '../api/helpers.js';
-import { createDocument } from '../api/feishu.js';
+import { apiPost, apiGet, createDocument } from '../api/feishu.js';
 import { markdownToBlocks } from '../api/feishu-md.js';
 
-const API_BASE = 'https://open.feishu.cn/open-apis';
 const BATCH_SIZE = 50;
 
-async function apiPost(path, token, body) {
-  const resp = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await resp.json();
-  if (data.code !== 0) {
-    throw new Error(`API error (${data.code}): ${data.msg}`);
-  }
-  return data.data;
+function isRetryableError(err) {
+  const msg = err.message || '';
+  return msg.includes('429') || msg.includes('rate limited') || msg.includes('fetch failed') || msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT');
 }
 
-async function apiGet(path, token, query = {}) {
-  const url = new URL(`${API_BASE}${path}`);
-  for (const [k, v] of Object.entries(query)) {
-    if (v != null) url.searchParams.set(k, String(v));
+async function fetchAllCells(docId, token, tableId, expectedCount) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const cells = [];
+    let pageToken;
+    do {
+      const query = { page_size: 500 };
+      if (pageToken) query.page_token = pageToken;
+      const resp = await apiGet(`/docx/v1/documents/${docId}/blocks/${tableId}/children`, token, query);
+      if (resp.items) cells.push(...resp.items);
+      pageToken = resp.page_token;
+    } while (pageToken);
+    if (!expectedCount || cells.length >= expectedCount) return cells;
+    await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
   }
-  const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-  const data = await resp.json();
-  if (data.code !== 0) {
-    throw new Error(`API error (${data.code}): ${data.msg}`);
-  }
-  return data.data;
+  // Final attempt
+  const cells = [];
+  let pageToken;
+  do {
+    const query = { page_size: 500 };
+    if (pageToken) query.page_token = pageToken;
+    const resp = await apiGet(`/docx/v1/documents/${docId}/blocks/${tableId}/children`, token, query);
+    if (resp.items) cells.push(...resp.items);
+    pageToken = resp.page_token;
+  } while (pageToken);
+  return cells;
 }
 
 async function uploadBlocks(docId, token, blocks) {
-  // Split into table and non-table, upload sequentially without index
   let pending = [];
   let added = 0, failed = 0;
 
@@ -46,9 +50,13 @@ async function uploadBlocks(docId, token, blocks) {
         await apiPost(`/docx/v1/documents/${docId}/blocks/${docId}/children`, token, { children: chunk });
         added += chunk.length;
       } catch (err) {
-        // Binary search for bad blocks
+        if (isRetryableError(err)) {
+          // Retryable error — don't binary-search, just rethrow so caller sees it
+          throw err;
+        }
+        // Content error — binary search for bad blocks
         if (chunk.length === 1) {
-          console.error(`  Skip 1 bad block`);
+          console.error(`  Skip 1 bad block: ${err.message}`);
           failed += 1;
         } else {
           const mid = Math.floor(chunk.length / 2);
@@ -68,19 +76,30 @@ async function uploadBlocks(docId, token, blocks) {
       await flush();
       const rowSize = block._table.rows.length;
       const colSize = block.table?.property?.column_size || block._table.rows[0]?.length || 1;
-      // Create empty table
+      // Calculate column widths based on max text length per column
+      const colMaxLen = new Array(colSize).fill(0);
+      for (const row of block._table.rows) {
+        if (!row) continue;
+        for (let c = 0; c < row.length && c < colSize; c++) {
+          const text = typeof row[c] === 'string' ? row[c] : '';
+          colMaxLen[c] = Math.max(colMaxLen[c], text.length);
+        }
+      }
+      const MIN_COL_WIDTH = 80;
+      const MAX_COL_WIDTH = 400;
+      const CHAR_WIDTH = 14;
+      const columnWidth = colMaxLen.map(len => Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, len * CHAR_WIDTH)));
       const tableBlock = {
         block_type: 31,
-        table: { property: { row_size: rowSize, column_size: colSize, header_row: true } },
+        table: { property: { row_size: rowSize, column_size: colSize, header_row: true, column_width: columnWidth } },
       };
       try {
         const resp = await apiPost(`/docx/v1/documents/${docId}/blocks/${docId}/children`, token, { children: [tableBlock] });
         const tableId = resp.children?.[0]?.block_id;
         if (tableId) {
-          await new Promise(r => setTimeout(r, 300));
-          const cellResp = await apiGet(`/docx/v1/documents/${docId}/blocks/${tableId}/children`, token, { page_size: 500 });
-          const cells = cellResp.items || [];
-          // Fill cells: _table.rows[r][c] is a string, convert to text block
+          const expectedCellCount = rowSize * colSize;
+          await new Promise(r => setTimeout(r, 800));
+          const cells = await fetchAllCells(docId, token, tableId, expectedCellCount);
           for (let r = 0; r < rowSize; r++) {
             const row = block._table.rows[r];
             if (!row) continue;
@@ -96,7 +115,9 @@ async function uploadBlocks(docId, token, blocks) {
               };
               try {
                 await apiPost(`/docx/v1/documents/${docId}/blocks/${cellId}/children`, token, { children: [textBlock] });
-              } catch {}
+              } catch (cellErr) {
+                console.error(`  Cell [${r},${c}] failed: ${cellErr.message}`);
+              }
               await new Promise(r => setTimeout(r, 50));
             }
           }
@@ -119,7 +140,7 @@ async function main() {
   const config = await readConfig();
   const inputPathArg = process.argv[2];
   if (!inputPathArg) {
-    console.error('Usage: node scripts/upload-doc.js <markdown-file>');
+    console.error('Usage: node scripts/upload.js <markdown-file>');
     process.exit(1);
   }
   const inputPath = resolvePath(inputPathArg);
