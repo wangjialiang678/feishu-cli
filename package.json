@@ -1,0 +1,18 @@
+{
+  "name": "feishu-cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "飞书文档 CLI 工具 — 以用户身份上传/下载 Markdown ↔ 飞书文档",
+  "scripts": {
+    "auth": "node scripts/auth.js",
+    "upload": "node scripts/upload.js",
+    "download": "node scripts/download.js",
+    "fetch": "node scripts/fetch.js",
+    "list": "node scripts/list.js",
+    "convert": "node scripts/convert.js"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.56.1"
+  }
+}

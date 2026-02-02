@@ -1,0 +1,8 @@
+{
+  "tokenPath": "./user-token.txt",
+  "wikiSpaceId": "",
+  "auth": {
+    "clientId": "cli_abc123",
+    "clientSecret": "abcABC123"
+  }
+}
