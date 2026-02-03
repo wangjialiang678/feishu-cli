@@ -20,7 +20,7 @@ async function main() {
   let docsTypes = [];
   const typeIdx = process.argv.indexOf('--type');
   if (typeIdx !== -1 && process.argv[typeIdx + 1]) {
-    docsTypes = process.argv[typeIdx + 1].split(',');
+    docsTypes = process.argv[typeIdx + 1].split(',').map(s => s.trim()).filter(Boolean);
   }
 
   // Use suite/docs-api/search/object (supports user_access_token)

@@ -684,7 +684,6 @@ export function markdownToBlocks(markdown) {
 
     if (trimmed === '') {
       flushParagraph();
-      pushBlankLine();
       i += 1;
       continue;
     }
@@ -1072,7 +1071,6 @@ export function markdownToFeishu(markdown) {
 
     if (trimmed === '') {
       flushParagraph();
-      pushBlankLine();
       i += 1;
       continue;
     }

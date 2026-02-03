@@ -1,18 +1,10 @@
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
-import { readToken, sanitizeFilename } from '../api/helpers.js';
+import { readToken, sanitizeFilename, extractDocumentId } from '../api/helpers.js';
 import { fetchDocumentMeta, downloadDocumentToFile } from '../api/feishu.js';
 
 if (typeof fetch !== 'function') {
   console.error('This CLI requires Node.js 18+ (global fetch).');
   process.exit(1);
-}
-
-function extractDocumentId(input) {
-  const trimmed = input.trim();
-  if (!trimmed) return trimmed;
-  const cleaned = trimmed.replace(/[?#].*$/, '').replace(/\/+$/, '');
-  const parts = cleaned.split('/').filter(Boolean);
-  return parts[parts.length - 1] || trimmed;
 }
 
 async function main() {

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 
 export async function readToken(tokenPath) {
   const raw = await fs.readFile(tokenPath, 'utf8');
@@ -67,9 +68,9 @@ export function ensurePosixPath(value) {
 
 export function expandHomeDir(inputPath) {
   if (!inputPath) return inputPath;
-  if (inputPath === '~') return process.env.HOME || inputPath;
+  if (inputPath === '~') return os.homedir() || inputPath;
   if (inputPath.startsWith('~/')) {
-    const home = process.env.HOME || '';
+    const home = os.homedir() || '';
     return path.join(home, inputPath.slice(2));
   }
   return inputPath;
@@ -278,4 +279,12 @@ export function buildConflictPath(relPath) {
 
 export function resolveFileType(doc, existing) {
   return doc?.fileType || existing?.fileType || 'docx';
+}
+
+export function extractDocumentId(input) {
+  const trimmed = input.trim();
+  if (!trimmed) return trimmed;
+  const cleaned = trimmed.replace(/[?#].*$/, '').replace(/\/+$/, '');
+  const parts = cleaned.split('/').filter(Boolean);
+  return parts[parts.length - 1] || trimmed;
 }

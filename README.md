@@ -122,6 +122,8 @@ node scripts/upload.js <文件路径>
 - 第一个 `# 标题` 会被用作文档标题
 - 支持表格（Markdown 表格 → 飞书表格块）
 - 批量上传 50 个块一批，失败时自动二分法定位跳过坏块
+- 表格使用 Batch Descendants API 一次性创建（≤9 行），大表格自动回退逐 cell 填充
+- 列宽根据内容自动计算，支持 CJK 字符双倍宽度
 
 ### 下载飞书文档
 
@@ -232,9 +234,9 @@ feishu-cli/
 ├── package.json
 ├── user-token.txt         # OAuth token（自动生成，不提交）
 ├── api/
-│   ├── feishu.js          # 飞书 API 封装（文档 CRUD、Wiki 操作）
+│   ├── feishu.js          # 飞书 API 封装（文档 CRUD、Wiki 操作、表格工具函数）
 │   ├── feishu-md.js       # Markdown ↔ 飞书 Block JSON 转换器
-│   └── helpers.js         # Token 读取、文件名清理等工具函数
+│   └── helpers.js         # Token 读取、文件名清理、文档 ID 解析等工具函数
 ├── scripts/
 │   ├── auth.js            # OAuth 2.0 授权 + token 自动刷新
 │   ├── upload.js          # 上传 Markdown → 飞书文档
@@ -248,7 +250,8 @@ feishu-cli/
 │   └── feishu-md.test.js  # Markdown ↔ Block JSON 转换单元测试
 └── docs/
     ├── technical.md       # 技术架构文档
-    └── comparison-with-feishufs.md  # 与 FeishuFS 项目对比
+    ├── comparison-with-feishufs.md  # 与 FeishuFS 项目对比
+    └── research/          # 技术调研报告
 ```
 
 ---
@@ -408,7 +411,7 @@ Claude Code 会自动创建 skill 文件。
 npm test
 ```
 
-使用 Node.js 内置测试框架，覆盖 Markdown ↔ Block JSON 双向转换、内联格式解析、边界情况处理。
+使用 Node.js 内置测试框架（44 个测试用例），覆盖 Markdown ↔ Block JSON 双向转换、内联格式解析、表格边界情况、文档 ID 解析等。
 
 ---
 

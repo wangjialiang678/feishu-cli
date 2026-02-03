@@ -23,7 +23,8 @@ import {
 
 export const API_BASE = 'https://open.feishu.cn/open-apis';
 const DELETE_BATCH_SIZE = 100;
-const CREATE_BATCH_SIZE = 100;
+const CREATE_BATCH_SIZE = 50;
+const MAX_RETRY_DELAY_MS = 60000;
 
 export async function apiRequest(method, pathSuffix, token, { query = {}, body } = {}) {
   const url = new URL(`${API_BASE}${pathSuffix}`);
@@ -61,14 +62,23 @@ export async function apiRequest(method, pathSuffix, token, { query = {}, body }
 
     if (response.status === 429) {
       const retryAfter = Number(response.headers.get('retry-after'));
-      const delayMs = Number.isFinite(retryAfter)
+      let delayMs = Number.isFinite(retryAfter)
         ? retryAfter * 1000
         : Math.min(8000, 1000 * 2 ** attempt);
+      delayMs = Math.min(MAX_RETRY_DELAY_MS, delayMs);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       continue;
     }
 
-    const text = await response.text();
+    let text;
+    try {
+      text = await response.text();
+    } catch (err) {
+      throw new Error(
+        `Failed to read response from ${url.toString()} (status ${response.status}): ${err.message || err}`
+      );
+    }
+
     let data;
     try {
       data = text ? JSON.parse(text) : null;
@@ -104,65 +114,43 @@ export function apiDelete(pathSuffix, token, body, query) {
   return apiRequest('DELETE', pathSuffix, token, { query, body });
 }
 
+async function fetchAllPaged(pathSuffix, token, query = {}, { pageSize = 100 } = {}) {
+  const items = [];
+  let pageToken;
+  let hasMore = true;
+
+  while (hasMore) {
+    const data = await apiGet(pathSuffix, token, {
+      ...query,
+      page_size: pageSize,
+      page_token: pageToken,
+    });
+
+    const batch = data.items || data.blocks || data.nodes || data.children || [];
+    items.push(...batch);
+
+    pageToken = data.page_token || data.next_page_token || '';
+    if (typeof data.has_more === 'boolean') {
+      hasMore = data.has_more;
+    } else {
+      hasMore = Boolean(pageToken);
+    }
+  }
+
+  return items;
+}
+
 export async function deleteRemoteDocument(documentId, token, fileType) {
   const type = fileType || 'docx';
   await apiDelete(`/drive/v1/files/${documentId}`, token, undefined, { type });
 }
 
 export async function fetchAllBlocks(documentId, token) {
-  const blocks = [];
-  let pageToken;
-  let hasMore = true;
-
-  while (hasMore) {
-    const data = await apiGet(
-      `/docx/v1/documents/${documentId}/blocks`,
-      token,
-      {
-        page_size: 100,
-        document_revision_id: -1,
-        page_token: pageToken,
-      }
-    );
-
-    const items = data.items || data.blocks || [];
-    blocks.push(...items);
-
-    pageToken = data.page_token || data.next_page_token || '';
-    if (typeof data.has_more === 'boolean') {
-      hasMore = data.has_more;
-    } else {
-      hasMore = Boolean(pageToken);
-    }
-  }
-
-  return blocks;
+  return fetchAllPaged(`/docx/v1/documents/${documentId}/blocks`, token, { document_revision_id: -1 });
 }
 
 export async function fetchWikiNodes(spaceId, token, parentNodeToken) {
-  const nodes = [];
-  let pageToken;
-  let hasMore = true;
-
-  while (hasMore) {
-    const data = await apiGet(`/wiki/v2/spaces/${spaceId}/nodes`, token, {
-      parent_node_token: parentNodeToken,
-      page_token: pageToken,
-      page_size: 50,
-    });
-
-    const items = data.items || data.nodes || [];
-    nodes.push(...items);
-
-    pageToken = data.page_token || data.next_page_token || '';
-    if (typeof data.has_more === 'boolean') {
-      hasMore = data.has_more;
-    } else {
-      hasMore = Boolean(pageToken);
-    }
-  }
-
-  return nodes;
+  return fetchAllPaged(`/wiki/v2/spaces/${spaceId}/nodes`, token, { parent_node_token: parentNodeToken }, { pageSize: 50 });
 }
 
 export async function collectWikiDocNodes(spaceId, token, parentNodeToken, result) {
@@ -211,77 +199,158 @@ function extractBlocksFromResponse(data) {
   return [];
 }
 
-function buildCellTextBlocks(content) {
-  const lines = content.split('\n');
-  const blocks = [];
-  for (const line of lines) {
-    const elements = inlineMarkdownToElements(line);
-    blocks.push({
-      block_type: BLOCK_TYPE.text,
-      text: {
-        style: {},
-        elements,
-      },
-    });
+// --- Table utilities (shared with upload.js) ---
+
+let _tableIdCounter = 0;
+export function tempId(prefix) {
+  _tableIdCounter += 1;
+  return `${prefix}_${Date.now()}_${_tableIdCounter}`;
+}
+
+export function stripMarkdownForWidth(text) {
+  return text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+}
+
+export function getDisplayWidth(text) {
+  const visible = stripMarkdownForWidth(text);
+  let width = 0;
+  for (const char of visible) {
+    width += /[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(char) ? 2 : 1;
   }
-  return blocks;
+  return width;
+}
+
+export function calculateColumnWidths(rows, colSize) {
+  const colMaxWidth = new Array(colSize).fill(0);
+  for (const row of rows) {
+    if (!row) continue;
+    for (let c = 0; c < row.length && c < colSize; c++) {
+      const text = typeof row[c] === 'string' ? row[c] : '';
+      colMaxWidth[c] = Math.max(colMaxWidth[c], getDisplayWidth(text));
+    }
+  }
+  const MIN_COL_WIDTH = 60;
+  const MAX_COL_WIDTH = 360;
+  const CHAR_WIDTH = 10;
+  return colMaxWidth.map(w => Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, w * CHAR_WIDTH)));
+}
+
+const MAX_BATCH_DESCENDANT_ROWS = 9;
+
+export function buildTableDescendants(rows, colSize, columnWidth) {
+  const rowSize = rows.length;
+  const tableId = tempId('tbl');
+  const cellIds = [];
+  const descendants = [];
+
+  for (let r = 0; r < rowSize; r++) {
+    const row = rows[r];
+    for (let c = 0; c < colSize; c++) {
+      const cellId = tempId('cell');
+      const contentId = tempId('txt');
+      const cellText = (row && typeof row[c] === 'string') ? row[c] : '';
+
+      // Parent (cell) before child (text)
+      descendants.push({
+        block_id: cellId,
+        block_type: BLOCK_TYPE.table_cell,
+        table_cell: {},
+        children: [contentId],
+      });
+
+      descendants.push({
+        block_id: contentId,
+        block_type: BLOCK_TYPE.text,
+        text: { elements: inlineMarkdownToElements(cellText), style: {} },
+        children: [],
+      });
+
+      cellIds.push(cellId);
+    }
+  }
+
+  descendants.unshift({
+    block_id: tableId,
+    block_type: BLOCK_TYPE.table,
+    table: {
+      property: {
+        row_size: rowSize,
+        column_size: colSize,
+        header_row: true,
+        column_width: columnWidth,
+      },
+    },
+    children: cellIds,
+  });
+
+  return { tableId, descendants };
 }
 
 async function createTableWithContent(documentId, token, tableBlock, index) {
   const rows = tableBlock._table?.rows || [];
-  const rowSize = tableBlock.table?.property?.row_size || rows.length;
   const columnSize = tableBlock.table?.property?.column_size || rows[0]?.length || 0;
-  const headerRow = Boolean(tableBlock.table?.property?.header_row);
 
   if (!rows.length || !columnSize) {
     return index;
   }
 
-  const payload = {
-    block_type: BLOCK_TYPE.table,
-    table: {
-      property: {
-        row_size: rowSize,
-        column_size: columnSize,
-        header_row: headerRow,
-        header_column: false,
+  const columnWidth = calculateColumnWidths(rows, columnSize);
+
+  if (rows.length <= MAX_BATCH_DESCENDANT_ROWS) {
+    // Fast path: Batch Descendants for small tables
+    const { tableId, descendants } = buildTableDescendants(rows, columnSize, columnWidth);
+    await apiPost(
+      `/docx/v1/documents/${documentId}/blocks/${documentId}/descendant`,
+      token,
+      { children_id: [tableId], descendants },
+      { document_revision_id: -1 },
+    );
+  } else {
+    // Large table: create empty table, then fill cells
+    const headerRow = Boolean(tableBlock.table?.property?.header_row);
+    const payload = {
+      block_type: BLOCK_TYPE.table,
+      table: {
+        property: {
+          row_size: rows.length,
+          column_size: columnSize,
+          header_row: headerRow,
+          header_column: false,
+          column_width: columnWidth,
+        },
       },
-    },
-  };
+    };
 
-  const resp = await apiPost(
-    `/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
-    token,
-    {
-      index,
-      children: [payload],
-    }
-  );
+    const resp = await apiPost(
+      `/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
+      token,
+      { index, children: [payload] },
+    );
 
-  const created = extractBlocksFromResponse(resp);
-  const createdTable =
-    created.find((block) => block.block_type === BLOCK_TYPE.table) || created[0];
-  const cellIds = createdTable?.table?.cells || [];
+    const created = extractBlocksFromResponse(resp);
+    const createdTable =
+      created.find((block) => block.block_type === BLOCK_TYPE.table) || created[0];
+    const cellIds = createdTable?.table?.cells || [];
 
-  if (!cellIds.length) {
-    return index + 1;
-  }
-
-  for (let r = 0; r < rows.length; r += 1) {
-    for (let c = 0; c < rows[r].length; c += 1) {
-      const cellId = cellIds[r * columnSize + c];
-      if (!cellId) continue;
-      const cellContent = rows[r][c] || '';
-      if (!cellContent.trim()) continue;
-      const children = buildCellTextBlocks(cellContent);
-      await apiPost(
-        `/docx/v1/documents/${documentId}/blocks/${cellId}/children`,
-        token,
-        {
-          index: 0,
-          children,
+    if (cellIds.length) {
+      for (let r = 0; r < rows.length; r += 1) {
+        for (let c = 0; c < rows[r].length; c += 1) {
+          const cellId = cellIds[r * columnSize + c];
+          if (!cellId) continue;
+          const cellContent = rows[r][c] || '';
+          if (!cellContent.trim()) continue;
+          const elements = inlineMarkdownToElements(cellContent);
+          const children = [{
+            block_type: BLOCK_TYPE.text,
+            text: { style: {}, elements },
+          }];
+          await apiPost(
+            `/docx/v1/documents/${documentId}/blocks/${cellId}/children`,
+            token,
+            { index: 0, children },
+          );
         }
-      );
+      }
     }
   }
 
@@ -325,9 +394,11 @@ export async function appendBlocksWithTables(documentId, token, blocks) {
 }
 
 export async function createDocument(token, title) {
+  const extractId = (data) => data?.document?.document_id || data?.document_id || data?.documentId;
+
   try {
     const data = await apiPost('/docx/v1/documents', token, title ? { title } : undefined);
-    const documentId = data?.document?.document_id || data?.document_id || data?.documentId;
+    const documentId = extractId(data);
     if (!documentId) {
       throw new Error('Create document response missing document_id.');
     }
@@ -335,7 +406,7 @@ export async function createDocument(token, title) {
   } catch (err) {
     if (title) {
       const data = await apiPost('/docx/v1/documents', token);
-      const documentId = data?.document?.document_id || data?.document_id || data?.documentId;
+      const documentId = extractId(data);
       if (!documentId) {
         throw new Error('Create document response missing document_id.');
       }
@@ -353,29 +424,13 @@ export async function addDocToWiki(spaceId, token, documentId) {
 }
 
 async function fetchChildrenCount(documentId, token) {
-  let count = 0;
-  let pageToken;
-  let hasMore = true;
-  while (hasMore) {
-    const data = await apiGet(
-      `/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
-      token,
-      {
-        page_size: 200,
-        document_revision_id: -1,
-        page_token: pageToken,
-      }
-    );
-    const items = data.items || data.blocks || data.children || [];
-    count += items.length;
-    pageToken = data.page_token || data.next_page_token || '';
-    if (typeof data.has_more === 'boolean') {
-      hasMore = data.has_more;
-    } else {
-      hasMore = Boolean(pageToken);
-    }
-  }
-  return count;
+  const items = await fetchAllPaged(
+    `/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
+    token,
+    { document_revision_id: -1 },
+    { pageSize: 200 },
+  );
+  return items.length;
 }
 
 async function deleteAllChildren(documentId, token) {

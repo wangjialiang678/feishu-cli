@@ -1,19 +1,11 @@
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
-import { readToken } from '../api/helpers.js';
+import { readToken, extractDocumentId } from '../api/helpers.js';
 import { fetchDocumentMeta, fetchAllBlocks } from '../api/feishu.js';
 import { feishuToMarkdown } from '../api/feishu-md.js';
 
 if (typeof fetch !== 'function') {
   console.error('This CLI requires Node.js 18+ (global fetch).');
   process.exit(1);
-}
-
-function extractDocumentId(input) {
-  const trimmed = input.trim();
-  if (!trimmed) return trimmed;
-  const cleaned = trimmed.replace(/[?#].*$/, '').replace(/\/+$/, '');
-  const parts = cleaned.split('/').filter(Boolean);
-  return parts[parts.length - 1] || trimmed;
 }
 
 async function main() {

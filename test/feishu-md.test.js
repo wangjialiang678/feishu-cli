@@ -7,6 +7,7 @@ import {
   inlineMarkdownToElements,
   markdownToFeishu,
 } from '../api/feishu-md.js';
+import { extractDocumentId } from '../api/helpers.js';
 
 // ── helpers ────────────────────────────────────────────────────────────
 
@@ -346,5 +347,113 @@ describe('roundtrip: markdown → blocks → feishu → markdown', () => {
     const page = result.blocks.find((b) => b.block_type === BLOCK_TYPE.page);
     assert.ok(page, 'should have page block');
     assert.ok(Array.isArray(page.children), 'page should have children');
+  });
+});
+
+// ── markdownToBlocks: table edge cases ─────────────────────────────────
+
+describe('markdownToBlocks: table edge cases', () => {
+  it('parses empty table cells', () => {
+    const md = '# T\n\n| A | B |\n|---|---|\n|   | 2 |\n| 3 |   |';
+    const { blocks } = markdownToBlocks(md);
+    const table = blocks.find((b) => b.block_type === BLOCK_TYPE.table);
+    assert.ok(table);
+    assert.equal(table._table.rows.length, 3);
+  });
+
+  it('parses single-column table', () => {
+    const md = '# T\n\n| A |\n|---|\n| 1 |\n| 2 |';
+    const { blocks } = markdownToBlocks(md);
+    const table = blocks.find((b) => b.block_type === BLOCK_TYPE.table);
+    assert.ok(table);
+    assert.equal(table.table.property.column_size, 1);
+  });
+
+  it('parses table with inline formatting in cells', () => {
+    const md = '# T\n\n| Name | Link |\n|---|---|\n| **bold** | [click](https://example.com) |';
+    const { blocks } = markdownToBlocks(md);
+    const table = blocks.find((b) => b.block_type === BLOCK_TYPE.table);
+    assert.ok(table);
+    // Cell content should preserve markdown formatting
+    assert.ok(table._table.rows[1][0].includes('**bold**'));
+  });
+
+  it('parses table with special characters', () => {
+    const md = '# T\n\n| Col |\n|---|\n| `code` |\n| a & b |\n| <tag> |';
+    const { blocks } = markdownToBlocks(md);
+    const table = blocks.find((b) => b.block_type === BLOCK_TYPE.table);
+    assert.ok(table);
+    assert.equal(table._table.rows.length, 4); // header + 3 data rows
+  });
+});
+
+// ── inlineMarkdownToElements: complex cases ────────────────────────────
+
+describe('inlineMarkdownToElements: complex cases', () => {
+  it('parses bold inside text', () => {
+    const els = inlineMarkdownToElements('before **bold** after');
+    assert.ok(els.length >= 3);
+    const bold = els.find((e) => e.text_run?.text_element_style?.bold);
+    assert.ok(bold);
+    assert.equal(bold.text_run.content, 'bold');
+  });
+
+  it('parses adjacent bold and italic', () => {
+    const els = inlineMarkdownToElements('**bold** *italic*');
+    const bold = els.find((e) => e.text_run?.text_element_style?.bold);
+    const italic = els.find((e) => e.text_run?.text_element_style?.italic);
+    assert.ok(bold);
+    assert.ok(italic);
+  });
+
+  it('parses link with special characters in URL', () => {
+    const els = inlineMarkdownToElements('[text](https://example.com/path?a=1&b=2)');
+    const link = els.find((e) => e.text_run?.text_element_style?.link);
+    assert.ok(link);
+    assert.equal(link.text_run.content, 'text');
+  });
+
+  it('handles empty string', () => {
+    const els = inlineMarkdownToElements('');
+    assert.ok(Array.isArray(els));
+  });
+
+  it('handles text with only spaces', () => {
+    const els = inlineMarkdownToElements('   ');
+    assert.ok(Array.isArray(els));
+  });
+});
+
+// ── extractDocumentId ──────────────────────────────────────────────────
+
+describe('extractDocumentId', () => {
+  it('extracts ID from full URL', () => {
+    const id = extractDocumentId('https://sample.feishu.cn/docx/abc123def');
+    assert.equal(id, 'abc123def');
+  });
+
+  it('extracts ID from URL with query params', () => {
+    const id = extractDocumentId('https://sample.feishu.cn/docx/abc123?from=share');
+    assert.equal(id, 'abc123');
+  });
+
+  it('extracts ID from URL with hash', () => {
+    const id = extractDocumentId('https://sample.feishu.cn/docx/abc123#section');
+    assert.equal(id, 'abc123');
+  });
+
+  it('returns plain ID as-is', () => {
+    const id = extractDocumentId('abc123');
+    assert.equal(id, 'abc123');
+  });
+
+  it('handles trailing slashes', () => {
+    const id = extractDocumentId('https://sample.feishu.cn/docx/abc123///');
+    assert.equal(id, 'abc123');
+  });
+
+  it('handles empty string', () => {
+    const id = extractDocumentId('  ');
+    assert.equal(id, '');
   });
 });
