@@ -1,6 +1,7 @@
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
 import { readToken } from '../api/helpers.js';
 import { fetchWikiNodes } from '../api/feishu.js';
+import { createSpinner } from './cli-utils.js';
 
 if (typeof fetch !== 'function') {
   console.error('This CLI requires Node.js 18+ (global fetch).');
@@ -13,15 +14,15 @@ function formatNodeLine(node, indent) {
   return `${'  '.repeat(indent)}- ${title} ${docToken}`;
 }
 
-async function listNodes(spaceId, token, parentNodeToken, indent) {
+async function collectNodes(spaceId, token, parentNodeToken, indent, lines) {
   const nodes = await fetchWikiNodes(spaceId, token, parentNodeToken);
   for (const node of nodes) {
-    console.log(formatNodeLine(node, indent));
+    lines.push(formatNodeLine(node, indent));
     const hasChild = node.has_child ?? node.hasChild;
     if (hasChild) {
       const nodeToken = node.node_token || node.nodeToken;
       if (nodeToken) {
-        await listNodes(spaceId, token, nodeToken, indent + 1);
+        await collectNodes(spaceId, token, nodeToken, indent + 1, lines);
       }
     }
   }
@@ -33,7 +34,11 @@ async function main() {
   const tokenPath = resolvePath(requireConfigValue(config, 'tokenPath'));
   const token = await readToken(tokenPath);
 
-  await listNodes(spaceId, token, undefined, 0);
+  const spinner = createSpinner('Loading wiki tree...').start();
+  const lines = [];
+  await collectNodes(spaceId, token, undefined, 0, lines);
+  spinner.succeed(`${lines.length} nodes`);
+  for (const line of lines) console.log(line);
 }
 
 main().catch((err) => {

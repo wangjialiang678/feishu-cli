@@ -4,6 +4,8 @@ agent_docs/
 user-token.txt
 config.json
 wikid/
+.claude/
+.orchestrator/
 # Logs
 logs
 *.log

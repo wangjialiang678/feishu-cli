@@ -114,7 +114,7 @@ export function apiDelete(pathSuffix, token, body, query) {
   return apiRequest('DELETE', pathSuffix, token, { query, body });
 }
 
-async function fetchAllPaged(pathSuffix, token, query = {}, { pageSize = 100 } = {}) {
+export async function fetchAllPaged(pathSuffix, token, query = {}, { pageSize = 100 } = {}) {
   const items = [];
   let pageToken;
   let hasMore = true;
@@ -189,16 +189,6 @@ export async function downloadDocumentToFile(documentId, token, metadata, filePa
   return crypto.createHash('sha256').update(markdown).digest('hex');
 }
 
-function extractBlocksFromResponse(data) {
-  if (!data) return [];
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data.children)) return data.children;
-  if (Array.isArray(data.blocks)) return data.blocks;
-  if (Array.isArray(data.items)) return data.items;
-  if (data.data) return extractBlocksFromResponse(data.data);
-  return [];
-}
-
 // --- Table utilities (shared with upload.js) ---
 
 let _tableIdCounter = 0;
@@ -234,8 +224,6 @@ export function calculateColumnWidths(rows, colSize) {
   const CHAR_WIDTH = 10;
   return colMaxWidth.map(w => Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, w * CHAR_WIDTH)));
 }
-
-const MAX_BATCH_DESCENDANT_ROWS = 9;
 
 export function buildTableDescendants(rows, colSize, columnWidth) {
   const rowSize = rows.length;
@@ -296,63 +284,13 @@ async function createTableWithContent(documentId, token, tableBlock, index) {
 
   const columnWidth = calculateColumnWidths(rows, columnSize);
 
-  if (rows.length <= MAX_BATCH_DESCENDANT_ROWS) {
-    // Fast path: Batch Descendants for small tables
-    const { tableId, descendants } = buildTableDescendants(rows, columnSize, columnWidth);
-    await apiPost(
-      `/docx/v1/documents/${documentId}/blocks/${documentId}/descendant`,
-      token,
-      { children_id: [tableId], descendants },
-      { document_revision_id: -1 },
-    );
-  } else {
-    // Large table: create empty table, then fill cells
-    const headerRow = Boolean(tableBlock.table?.property?.header_row);
-    const payload = {
-      block_type: BLOCK_TYPE.table,
-      table: {
-        property: {
-          row_size: rows.length,
-          column_size: columnSize,
-          header_row: headerRow,
-          header_column: false,
-          column_width: columnWidth,
-        },
-      },
-    };
-
-    const resp = await apiPost(
-      `/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
-      token,
-      { index, children: [payload] },
-    );
-
-    const created = extractBlocksFromResponse(resp);
-    const createdTable =
-      created.find((block) => block.block_type === BLOCK_TYPE.table) || created[0];
-    const cellIds = createdTable?.table?.cells || [];
-
-    if (cellIds.length) {
-      for (let r = 0; r < rows.length; r += 1) {
-        for (let c = 0; c < rows[r].length; c += 1) {
-          const cellId = cellIds[r * columnSize + c];
-          if (!cellId) continue;
-          const cellContent = rows[r][c] || '';
-          if (!cellContent.trim()) continue;
-          const elements = inlineMarkdownToElements(cellContent);
-          const children = [{
-            block_type: BLOCK_TYPE.text,
-            text: { style: {}, elements },
-          }];
-          await apiPost(
-            `/docx/v1/documents/${documentId}/blocks/${cellId}/children`,
-            token,
-            { index: 0, children },
-          );
-        }
-      }
-    }
-  }
+  const { tableId, descendants } = buildTableDescendants(rows, columnSize, columnWidth);
+  await apiPost(
+    `/docx/v1/documents/${documentId}/blocks/${documentId}/descendant`,
+    token,
+    { children_id: [tableId], descendants },
+    { document_revision_id: -1 },
+  );
 
   return index + 1;
 }
@@ -371,6 +309,44 @@ export async function appendBlocks(documentId, token, blocks, startIndex = 0) {
   return index;
 }
 
+export function buildCalloutDescendants(block) {
+  const calloutId = tempId('callout');
+  const children = block._callout_children || [];
+  const descendants = [];
+  const childIds = [];
+
+  for (const child of children) {
+    const childId = tempId('ctxt');
+    childIds.push(childId);
+    descendants.push({
+      block_id: childId,
+      block_type: child.block_type || BLOCK_TYPE.text,
+      text: child.text || { elements: [{ text_run: { content: '', text_element_style: {} } }], style: {} },
+      children: [],
+    });
+  }
+
+  descendants.unshift({
+    block_id: calloutId,
+    block_type: BLOCK_TYPE.callout,
+    callout: block.callout || {},
+    children: childIds,
+  });
+
+  return { calloutId, descendants };
+}
+
+async function createCalloutWithContent(documentId, token, block, index) {
+  const { calloutId, descendants } = buildCalloutDescendants(block);
+  await apiPost(
+    `/docx/v1/documents/${documentId}/blocks/${documentId}/descendant`,
+    token,
+    { children_id: [calloutId], descendants },
+    { document_revision_id: -1 },
+  );
+  return index + 1;
+}
+
 export async function appendBlocksWithTables(documentId, token, blocks) {
   let index = 0;
   let buffer = [];
@@ -385,6 +361,11 @@ export async function appendBlocksWithTables(documentId, token, blocks) {
     if (block.block_type === BLOCK_TYPE.table && block._table) {
       await flushBuffer();
       index = await createTableWithContent(documentId, token, block, index);
+      continue;
+    }
+    if (block.block_type === BLOCK_TYPE.callout && block._callout_children) {
+      await flushBuffer();
+      index = await createCalloutWithContent(documentId, token, block, index);
       continue;
     }
     buffer.push(block);

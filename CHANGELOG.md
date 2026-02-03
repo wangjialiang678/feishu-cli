@@ -2,10 +2,35 @@
 
 ## [Unreleased] - 2026-02-03
 
+### 新功能
+
+**多维表格（Bitable）操作**
+- `npm run bitable-fields <app_token> <table_id>` — 查看表格字段结构，支持 `--json` 输出
+- `npm run bitable-read <app_token> <table_id>` — 导出全部记录为 CSV（stdout），支持 `--json`
+- `npm run bitable-write <app_token> <table_id> <csv_file>` — 从 CSV 批量导入记录（500条/批）
+- 内置 RFC 4180 CSV 解析器，无外部依赖
+- 复杂字段类型自动格式化（数组→分号分隔，对象→取 text/name）
+
+**交互式 CLI 增强**
+- 新增 `scripts/cli-utils.js` — 共享 spinner 和 progress bar 工具
+- `upload.js` — 解析/创建阶段显示 spinner，上传阶段显示 progress bar
+- `download.js` — 获取/下载阶段显示 spinner
+- `search.js` — 搜索阶段显示 spinner
+- `list.js` — 加载 Wiki 树阶段显示 spinner（重构为先收集再输出）
+- `bitable-write.js` — 批量写入阶段显示 progress bar
+- 所有 spinner/progress 输出走 stderr，不污染 stdout 管道
+- 非 TTY 环境自动降级为文本输出（百分比里程碑）
+
+### 依赖
+
+- 新增 `ora` ^9.1.0 — ESM spinner
+- 新增 `cli-progress` ^3.12.0 — 进度条
+
 ### 修复
 
 - **表格内容丢失**: 表格 cell 内的 Markdown 行内格式（链接、粗体、斜体、代码等）现在会被正确解析并上传。之前 `[链接文本](url)` 在表格中会显示为纯文本，现在显示为可点击的链接。
 - **多余空行**: Markdown 空行不再生成空 paragraph block。之前上传后飞书文档中会出现大量多余的空白段落，现在空行仅作为段落分隔符处理。
+- **大表格上传失败**: 移除了错误的 `MAX_BATCH_DESCENDANT_ROWS = 9` 行数限制。之前 >9 行的表格会回退到 Children API + 逐 cell 填充，而 Children API 对大表格返回 `invalid param`。现在所有表格统一使用 Batch Descendants API（经测试支持 50+ 行）。
 
 ### 优化
 

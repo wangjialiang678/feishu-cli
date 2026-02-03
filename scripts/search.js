@@ -1,6 +1,7 @@
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
 import { readToken } from '../api/helpers.js';
 import { apiPost } from '../api/feishu.js';
+import { createSpinner } from './cli-utils.js';
 
 const ERR_SEARCH_NO_PERMISSION = '99991672';
 const ERR_SEARCH_NOT_ENABLED = '99991663';
@@ -33,8 +34,10 @@ async function main() {
     body.docs_types = docsTypes;
   }
 
+  const spinner = createSpinner(`Searching "${keyword}"...`).start();
   try {
     const data = await apiPost('/suite/docs-api/search/object', token, body) || {};
+    spinner.stop();
     const docs = data.docs_entities || [];
 
     if (!docs.length) {
@@ -58,7 +61,7 @@ async function main() {
       console.log();
     }
   } catch (err) {
-    // Fallback: try newer API
+    spinner.stop();
     if (err.message.includes(ERR_SEARCH_NO_PERMISSION) || err.message.includes(ERR_SEARCH_NOT_ENABLED)) {
       console.error('搜索权限不足，请确认应用已开通 search 相关权限');
     } else {

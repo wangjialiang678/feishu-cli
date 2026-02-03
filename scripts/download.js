@@ -1,6 +1,7 @@
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
 import { readToken, sanitizeFilename, extractDocumentId } from '../api/helpers.js';
 import { fetchDocumentMeta, downloadDocumentToFile } from '../api/feishu.js';
+import { createSpinner } from './cli-utils.js';
 
 if (typeof fetch !== 'function') {
   console.error('This CLI requires Node.js 18+ (global fetch).');
@@ -19,9 +20,11 @@ async function main() {
   const documentId = extractDocumentId(docInput);
   const token = await readToken(tokenPath);
 
+  const spinner = createSpinner('Fetching document...').start();
   const metadata = await fetchDocumentMeta(documentId, token);
   const title = metadata.title || documentId;
   const filename = `${sanitizeFilename(title) || documentId}.md`;
+  spinner.text = `Downloading "${title}"...`;
   await downloadDocumentToFile(
     documentId,
     token,
@@ -32,7 +35,7 @@ async function main() {
     },
     filename
   );
-  console.log(`Saved ${filename}`);
+  spinner.succeed(`Saved ${filename}`);
 }
 
 main().catch((err) => {

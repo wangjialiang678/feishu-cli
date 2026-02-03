@@ -21,6 +21,7 @@ export const BLOCK_TYPE = {
   image: 27,
   table: 31,
   table_cell: 32,
+  callout: 19,
   quote_container: 34,
 };
 
@@ -40,6 +41,35 @@ function safeEncodeUrl(value) {
   } catch {
     return value;
   }
+}
+
+const CALLOUT_TYPE_MAP = {
+  NOTE: { emoji_id: 'pencil', background_color: 5, border_color: 5 },
+  TIP: { emoji_id: 'bulb', background_color: 4, border_color: 4 },
+  WARNING: { emoji_id: 'warning', background_color: 2, border_color: 2 },
+  IMPORTANT: { emoji_id: 'exclamation', background_color: 1, border_color: 1 },
+  CALLOUT: { emoji_id: 'pushpin', background_color: 7, border_color: 7 },
+};
+
+const EMOJI_TO_CALLOUT = {
+  pencil: 'NOTE',
+  memo: 'NOTE',
+  bulb: 'TIP',
+  star: 'TIP',
+  warning: 'WARNING',
+  exclamation: 'IMPORTANT',
+  bangbang: 'IMPORTANT',
+  pushpin: 'CALLOUT',
+};
+
+function emojiToCalloutType(emojiId) {
+  if (!emojiId) return 'CALLOUT';
+  return EMOJI_TO_CALLOUT[emojiId] || 'CALLOUT';
+}
+
+function calloutTypeToProps(type) {
+  const upper = (type || 'CALLOUT').toUpperCase();
+  return CALLOUT_TYPE_MAP[upper] || CALLOUT_TYPE_MAP.CALLOUT;
 }
 
 function textElementsToMarkdown(elements) {
@@ -120,6 +150,7 @@ function blockTypeFromBlock(block) {
   if (block.image) return BLOCK_TYPE.image;
   if (block.table) return BLOCK_TYPE.table;
   if (block.table_cell) return BLOCK_TYPE.table_cell;
+  if (block.callout) return BLOCK_TYPE.callout;
   if (block.quote_container) return BLOCK_TYPE.quote_container;
   return null;
 }
@@ -210,6 +241,24 @@ function renderBlock(block, blockMap, indentLevel = 0) {
     }
     case BLOCK_TYPE.table_cell: {
       lines.push(renderTableCell(block, blockMap));
+      break;
+    }
+    case BLOCK_TYPE.callout: {
+      const calloutType = emojiToCalloutType(block.callout?.emoji_id);
+      lines.push(`> [!${calloutType}]`);
+      const childIds = block.children || [];
+      for (const childId of childIds) {
+        const child = blockMap.get(childId);
+        if (!child) continue;
+        const childLines = renderBlock(child, blockMap, 0).split('\n');
+        for (const line of childLines) {
+          if (line === '') {
+            lines.push('>');
+          } else {
+            lines.push(`> ${line}`);
+          }
+        }
+      }
       break;
     }
     case BLOCK_TYPE.quote_container: {
@@ -594,6 +643,46 @@ export function markdownToBlocks(markdown) {
     }
 
     if (trimmed.startsWith('>')) {
+      const calloutMatch = trimmed.match(/^>\s*\[!(NOTE|TIP|WARNING|IMPORTANT|CALLOUT)\]\s*(.*)$/i);
+      if (calloutMatch) {
+        flushParagraph();
+        const calloutType = calloutMatch[1].toUpperCase();
+        const inlineContent = (calloutMatch[2] || '').trim();
+        i += 1;
+        const contentLines = [];
+        if (inlineContent) contentLines.push(inlineContent);
+        while (i < lines.length && lines[i].trim().startsWith('>')) {
+          const contentLine = lines[i].replace(/^\s*>\s?/, '');
+          contentLines.push(contentLine);
+          i += 1;
+        }
+        const props = calloutTypeToProps(calloutType);
+        const childBlocks = contentLines
+          .filter((l) => l.trim().length > 0)
+          .map((l) =>
+            createBlockPayload({
+              type: BLOCK_TYPE.text,
+              key: 'text',
+              elements: parseInlineMarkdown(l),
+            })
+          );
+        if (!childBlocks.length) {
+          childBlocks.push(
+            createBlockPayload({ type: BLOCK_TYPE.text, key: 'text', elements: [textRunElement('')] })
+          );
+        }
+        blocks.push({
+          block_type: BLOCK_TYPE.callout,
+          callout: {
+            background_color: props.background_color,
+            border_color: props.border_color,
+            emoji_id: props.emoji_id,
+          },
+          _callout_children: childBlocks,
+        });
+        continue;
+      }
+
       flushParagraph();
       const quoteLines = [];
       while (i < lines.length && lines[i].trim().startsWith('>')) {
@@ -968,6 +1057,53 @@ export function markdownToFeishu(markdown) {
     }
 
     if (trimmed.startsWith('>')) {
+      const calloutMatch = trimmed.match(/^>\s*\[!(NOTE|TIP|WARNING|IMPORTANT|CALLOUT)\]\s*(.*)$/i);
+      if (calloutMatch) {
+        flushParagraph();
+        const calloutType = calloutMatch[1].toUpperCase();
+        const inlineContent = (calloutMatch[2] || '').trim();
+        i += 1;
+        const contentLines = [];
+        if (inlineContent) contentLines.push(inlineContent);
+        while (i < lines.length && lines[i].trim().startsWith('>')) {
+          const contentLine = lines[i].replace(/^\s*>\s?/, '');
+          contentLines.push(contentLine);
+          i += 1;
+        }
+        const props = calloutTypeToProps(calloutType);
+        const calloutId = makeId();
+        const calloutBlock = {
+          block_id: calloutId,
+          parent_id: rootId,
+          block_type: BLOCK_TYPE.callout,
+          children: [],
+          callout: {
+            background_color: props.background_color,
+            border_color: props.border_color,
+            emoji_id: props.emoji_id,
+          },
+        };
+        blocks.push(calloutBlock);
+        pageBlock.children.push(calloutId);
+
+        const nonEmpty = contentLines.filter((l) => l.trim().length > 0);
+        if (!nonEmpty.length) nonEmpty.push('');
+        for (const cl of nonEmpty) {
+          const childId = makeId();
+          const childBlock = createBlock({
+            id: childId,
+            parentId: calloutId,
+            type: BLOCK_TYPE.text,
+            key: 'text',
+            elements: parseInlineMarkdown(cl),
+            extra: { style: { align: DEFAULT_ALIGN, folded: false } },
+          });
+          blocks.push(childBlock);
+          calloutBlock.children.push(childId);
+        }
+        continue;
+      }
+
       flushParagraph();
       const quoteLines = [];
       while (i < lines.length && lines[i].trim().startsWith('>')) {

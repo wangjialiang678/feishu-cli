@@ -457,3 +457,140 @@ describe('extractDocumentId', () => {
     assert.equal(id, '');
   });
 });
+
+// ── callout block tests ───────────────────────────────────────────────
+
+function calloutBlock(id, emojiId, childBlocks) {
+  return {
+    block_id: id,
+    block_type: BLOCK_TYPE.callout,
+    callout: {
+      background_color: 5,
+      border_color: 5,
+      emoji_id: emojiId,
+    },
+    children: childBlocks.map((b) => b.block_id),
+  };
+}
+
+describe('callout: feishuToMarkdown', () => {
+  it('converts callout with bulb emoji to [!TIP]', () => {
+    const child = textBlock('c1', 'This is a tip');
+    child.parent_id = 'callout1';
+    const block = calloutBlock('callout1', 'bulb', [child]);
+    const doc = buildDoc([block]);
+    doc.blocks.push(child);
+    const md = feishuToMarkdown(doc);
+    assert.ok(md.includes('> [!TIP]'));
+    assert.ok(md.includes('> This is a tip'));
+  });
+
+  it('converts callout with pencil emoji to [!NOTE]', () => {
+    const child = textBlock('c1', 'Note content');
+    child.parent_id = 'callout1';
+    const block = calloutBlock('callout1', 'pencil', [child]);
+    const doc = buildDoc([block]);
+    doc.blocks.push(child);
+    const md = feishuToMarkdown(doc);
+    assert.ok(md.includes('> [!NOTE]'));
+    assert.ok(md.includes('> Note content'));
+  });
+
+  it('converts callout with unknown emoji to [!CALLOUT]', () => {
+    const child = textBlock('c1', 'Unknown');
+    child.parent_id = 'callout1';
+    const block = calloutBlock('callout1', 'rocket', [child]);
+    const doc = buildDoc([block]);
+    doc.blocks.push(child);
+    const md = feishuToMarkdown(doc);
+    assert.ok(md.includes('> [!CALLOUT]'));
+  });
+
+  it('converts callout with multiple children', () => {
+    const child1 = textBlock('c1', 'Line one');
+    const child2 = textBlock('c2', 'Line two');
+    child1.parent_id = 'callout1';
+    child2.parent_id = 'callout1';
+    const block = calloutBlock('callout1', 'warning', [child1, child2]);
+    const doc = buildDoc([block]);
+    doc.blocks.push(child1, child2);
+    const md = feishuToMarkdown(doc);
+    assert.ok(md.includes('> [!WARNING]'));
+    assert.ok(md.includes('> Line one'));
+    assert.ok(md.includes('> Line two'));
+  });
+});
+
+describe('callout: markdownToBlocks', () => {
+  it('parses [!NOTE] callout', () => {
+    const md = '# Title\n\n> [!NOTE]\n> This is a note\n';
+    const { blocks } = markdownToBlocks(md);
+    const callout = blocks.find((b) => b.block_type === BLOCK_TYPE.callout);
+    assert.ok(callout, 'should have a callout block');
+    assert.equal(callout.callout.emoji_id, 'pencil');
+    assert.equal(callout.callout.background_color, 5);
+    assert.ok(callout._callout_children.length > 0);
+  });
+
+  it('parses [!WARNING] callout', () => {
+    const md = '# Title\n\n> [!WARNING]\n> Be careful\n';
+    const { blocks } = markdownToBlocks(md);
+    const callout = blocks.find((b) => b.block_type === BLOCK_TYPE.callout);
+    assert.ok(callout);
+    assert.equal(callout.callout.emoji_id, 'warning');
+    assert.equal(callout.callout.background_color, 2);
+  });
+
+  it('does not parse regular quotes as callout', () => {
+    const md = '# Title\n\n> This is a regular quote\n';
+    const { blocks } = markdownToBlocks(md);
+    const callout = blocks.find((b) => b.block_type === BLOCK_TYPE.callout);
+    assert.equal(callout, undefined);
+    const quote = blocks.find((b) => b.block_type === BLOCK_TYPE.quote);
+    assert.ok(quote, 'should have a quote block');
+  });
+
+  it('parses callout with multiple content lines', () => {
+    const md = '# Title\n\n> [!TIP]\n> Line one\n> Line two\n';
+    const { blocks } = markdownToBlocks(md);
+    const callout = blocks.find((b) => b.block_type === BLOCK_TYPE.callout);
+    assert.ok(callout);
+    assert.equal(callout._callout_children.length, 2);
+  });
+
+  it('preserves inline content after [!TYPE] tag', () => {
+    const md = '# Title\n\n> [!NOTE] This is inline content\n> And a second line\n';
+    const { blocks } = markdownToBlocks(md);
+    const callout = blocks.find((b) => b.block_type === BLOCK_TYPE.callout);
+    assert.ok(callout, 'should have a callout block');
+    assert.equal(callout._callout_children.length, 2);
+    const firstChild = callout._callout_children[0];
+    const content = firstChild.text.elements[0].text_run.content;
+    assert.equal(content, 'This is inline content');
+  });
+});
+
+describe('callout: markdownToFeishu roundtrip', () => {
+  it('produces valid callout tree structure', () => {
+    const md = '# Test\n\n> [!NOTE]\n> Important info\n';
+    const result = markdownToFeishu(md);
+    const callout = result.blocks.find((b) => b.block_type === BLOCK_TYPE.callout);
+    assert.ok(callout, 'should have callout block');
+    assert.ok(callout.children.length > 0, 'callout should have children');
+    assert.equal(callout.callout.emoji_id, 'pencil');
+    const childBlock = result.blocks.find((b) => b.block_id === callout.children[0]);
+    assert.ok(childBlock, 'child block should exist in blocks array');
+    assert.equal(childBlock.block_type, BLOCK_TYPE.text);
+  });
+
+  it('preserves inline content after [!TYPE] in tree structure', () => {
+    const md = '# Test\n\n> [!WARNING] Danger ahead\n';
+    const result = markdownToFeishu(md);
+    const callout = result.blocks.find((b) => b.block_type === BLOCK_TYPE.callout);
+    assert.ok(callout);
+    assert.equal(callout.children.length, 1);
+    const child = result.blocks.find((b) => b.block_id === callout.children[0]);
+    const content = child.text.elements[0].text_run.content;
+    assert.equal(content, 'Danger ahead');
+  });
+});

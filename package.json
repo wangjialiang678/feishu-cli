@@ -12,9 +12,15 @@
     "list": "node scripts/list.js",
     "convert": "node scripts/convert.js",
     "search": "node scripts/search.js",
+    "bitable-fields": "node scripts/bitable-fields.js",
+    "bitable-read": "node scripts/bitable-read.js",
+    "bitable-write": "node scripts/bitable-write.js",
+    "beautify": "node scripts/beautify.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.56.1"
+    "@larksuiteoapi/node-sdk": "^1.56.1",
+    "cli-progress": "^3.12.0",
+    "ora": "^9.1.0"
   }
 }
