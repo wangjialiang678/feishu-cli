@@ -1,6 +1,6 @@
 {
   "name": "feishu-cli",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "type": "module",
   "description": "飞书文档 CLI 工具 — 以用户身份上传/下载 Markdown ↔ 飞书文档",

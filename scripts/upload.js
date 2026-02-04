@@ -12,6 +12,49 @@ function isRetryableError(err) {
   return msg.includes('429') || msg.includes('rate limited') || msg.includes('fetch failed') || msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT');
 }
 
+/**
+ * Pre-validate Markdown content for potential upload issues
+ * @param {string} content - Markdown content
+ * @returns {Array<string>} - Array of warning messages
+ */
+function validateMarkdown(content) {
+  const warnings = [];
+
+  // Check for relative path links
+  const relativePaths = [...content.matchAll(/\[([^\]]+)\]\((?!https?:\/\/|#)([^)]+)\)/g)];
+  if (relativePaths.length > 0) {
+    warnings.push(
+      `⚠️  Found ${relativePaths.length} relative path link(s) - these may fail on Feishu:`
+    );
+    relativePaths.slice(0, 3).forEach(match => {
+      warnings.push(`    - [${match[1]}](${match[2]})`);
+    });
+    if (relativePaths.length > 3) {
+      warnings.push(`    ... and ${relativePaths.length - 3} more`);
+    }
+  }
+
+  // Check for nested inline syntax (bold wrapping links)
+  const nestedBold = content.match(/\*\*\[[^\]]+\]\([^)]+\)\*\*/g);
+  if (nestedBold) {
+    warnings.push(
+      `⚠️  Found ${nestedBold.length} bold-wrapped link(s) - not supported by feishu-cli`
+    );
+    warnings.push('    Fix: Remove ** markers or split into separate elements');
+  }
+
+  // Check for nested inline syntax (bold wrapping code)
+  const nestedCode = content.match(/\*\*`[^`]+`\*\*/g);
+  if (nestedCode) {
+    warnings.push(
+      `⚠️  Found ${nestedCode.length} bold-wrapped code span(s) - not supported by feishu-cli`
+    );
+    warnings.push('    Fix: Remove ** markers or split into separate elements');
+  }
+
+  return warnings;
+}
+
 async function uploadBlocks(docId, token, blocks, onProgress) {
   let pending = [];
   let added = 0, failed = 0;
@@ -121,6 +164,15 @@ async function main() {
 
   const markdown = await fs.readFile(inputPath, 'utf8');
   const token = await readToken(tokenPath);
+
+  // Pre-validate markdown content
+  const warnings = validateMarkdown(markdown);
+  if (warnings.length > 0) {
+    console.log('\n📋 Pre-upload validation warnings:\n');
+    warnings.forEach(w => console.log(w));
+    console.log('\nℹ️  These issues may cause upload failures or incorrect rendering.');
+    console.log('   Proceeding anyway...\n');
+  }
 
   const spinner = createSpinner('Parsing markdown...').start();
   const { title, blocks } = markdownToBlocks(markdown);
