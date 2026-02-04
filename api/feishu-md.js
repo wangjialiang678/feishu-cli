@@ -690,13 +690,25 @@ export function markdownToBlocks(markdown) {
         quoteLines.push(quoteLine);
         i += 1;
       }
-      blocks.push(
-        createBlockPayload({
-          type: BLOCK_TYPE.quote,
-          key: 'quote',
-          elements: mergeElementsWithNewlines(quoteLines),
-        })
-      );
+      const quoteChildBlocks = quoteLines
+        .filter((l) => l.trim().length > 0)
+        .map((l) =>
+          createBlockPayload({
+            type: BLOCK_TYPE.text,
+            key: 'text',
+            elements: parseInlineMarkdown(l),
+          })
+        );
+      if (!quoteChildBlocks.length) {
+        quoteChildBlocks.push(
+          createBlockPayload({ type: BLOCK_TYPE.text, key: 'text', elements: [textRunElement('')] })
+        );
+      }
+      blocks.push({
+        block_type: BLOCK_TYPE.quote_container,
+        quote_container: {},
+        _quote_children: quoteChildBlocks,
+      });
       continue;
     }
 

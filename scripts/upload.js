@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
 import { readToken } from '../api/helpers.js';
-import { apiPost, createDocument, buildTableDescendants, calculateColumnWidths, buildCalloutDescendants } from '../api/feishu.js';
+import { apiPost, createDocument, buildTableDescendants, calculateColumnWidths, buildCalloutDescendants, buildQuoteContainerDescendants } from '../api/feishu.js';
 import { markdownToBlocks, BLOCK_TYPE } from '../api/feishu-md.js';
 import { createSpinner, createProgressBar } from './cli-utils.js';
 
@@ -18,8 +18,10 @@ async function uploadBlocks(docId, token, blocks, onProgress) {
 
   const flush = async () => {
     if (!pending.length) return;
-    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
-      const chunk = pending.slice(i, i + BATCH_SIZE);
+    const toFlush = pending;
+    pending = [];
+    for (let i = 0; i < toFlush.length; i += BATCH_SIZE) {
+      const chunk = toFlush.slice(i, i + BATCH_SIZE);
       try {
         await apiPost(`/docx/v1/documents/${docId}/blocks/${docId}/children`, token, { children: chunk });
         added += chunk.length;
@@ -39,11 +41,9 @@ async function uploadBlocks(docId, token, blocks, onProgress) {
           await flush();
           pending = [...chunk.slice(mid)];
           await flush();
-          return;
         }
       }
     }
-    pending = [];
   };
 
   for (const block of blocks) {
@@ -83,6 +83,22 @@ async function uploadBlocks(docId, token, blocks, onProgress) {
         if (onProgress) onProgress(1);
       } catch (err) {
         console.error(`  Callout failed: ${err.message}`);
+        failed += 1;
+      }
+    } else if (block.block_type === BLOCK_TYPE.quote_container && block._quote_children) {
+      await flush();
+      try {
+        const { quoteId, descendants } = buildQuoteContainerDescendants(block);
+        await apiPost(
+          `/docx/v1/documents/${docId}/blocks/${docId}/descendant`,
+          token,
+          { children_id: [quoteId], descendants },
+          { document_revision_id: -1 },
+        );
+        added += 1;
+        if (onProgress) onProgress(1);
+      } catch (err) {
+        console.error(`  Quote failed: ${err.message}`);
         failed += 1;
       }
     } else {

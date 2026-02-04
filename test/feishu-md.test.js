@@ -8,6 +8,7 @@ import {
   markdownToFeishu,
 } from '../api/feishu-md.js';
 import { extractDocumentId } from '../api/helpers.js';
+import { buildQuoteContainerDescendants } from '../api/feishu.js';
 
 // ── helpers ────────────────────────────────────────────────────────────
 
@@ -546,8 +547,9 @@ describe('callout: markdownToBlocks', () => {
     const { blocks } = markdownToBlocks(md);
     const callout = blocks.find((b) => b.block_type === BLOCK_TYPE.callout);
     assert.equal(callout, undefined);
-    const quote = blocks.find((b) => b.block_type === BLOCK_TYPE.quote);
-    assert.ok(quote, 'should have a quote block');
+    const quoteContainer = blocks.find((b) => b.block_type === BLOCK_TYPE.quote_container);
+    assert.ok(quoteContainer, 'should have a quote_container block');
+    assert.ok(quoteContainer._quote_children, 'should have quote children');
   });
 
   it('parses callout with multiple content lines', () => {
@@ -592,5 +594,86 @@ describe('callout: markdownToFeishu roundtrip', () => {
     const child = result.blocks.find((b) => b.block_id === callout.children[0]);
     const content = child.text.elements[0].text_run.content;
     assert.equal(content, 'Danger ahead');
+  });
+});
+
+// ── quote_container block tests ───────────────────────────────────────
+
+describe('quote_container: markdownToBlocks', () => {
+  it('parses single-line blockquote as quote_container', () => {
+    const md = '# Title\n\n> This is a quote\n';
+    const { blocks } = markdownToBlocks(md);
+    const qc = blocks.find((b) => b.block_type === BLOCK_TYPE.quote_container);
+    assert.ok(qc, 'should have a quote_container block');
+    assert.ok(qc._quote_children, 'should have _quote_children');
+    assert.equal(qc._quote_children.length, 1);
+    assert.equal(qc._quote_children[0].text.elements[0].text_run.content, 'This is a quote');
+  });
+
+  it('parses multi-line blockquote as quote_container with multiple children', () => {
+    const md = '# Title\n\n> Line one\n> Line two\n> Line three\n';
+    const { blocks } = markdownToBlocks(md);
+    const qc = blocks.find((b) => b.block_type === BLOCK_TYPE.quote_container);
+    assert.ok(qc);
+    assert.equal(qc._quote_children.length, 3);
+  });
+
+  it('preserves inline formatting in quote children', () => {
+    const md = '# Title\n\n> **bold** and *italic*\n';
+    const { blocks } = markdownToBlocks(md);
+    const qc = blocks.find((b) => b.block_type === BLOCK_TYPE.quote_container);
+    assert.ok(qc);
+    const elements = qc._quote_children[0].text.elements;
+    const bold = elements.find((e) => e.text_run?.text_element_style?.bold);
+    assert.ok(bold, 'should preserve bold formatting');
+  });
+
+  it('creates empty text child for empty blockquote', () => {
+    const md = '# Title\n\n> \n';
+    const { blocks } = markdownToBlocks(md);
+    const qc = blocks.find((b) => b.block_type === BLOCK_TYPE.quote_container);
+    assert.ok(qc);
+    assert.equal(qc._quote_children.length, 1, 'should have fallback empty child');
+  });
+
+  it('does not confuse callout with regular quote', () => {
+    const md = '# Title\n\n> [!NOTE]\n> Note content\n\n> Regular quote\n';
+    const { blocks } = markdownToBlocks(md);
+    const callouts = blocks.filter((b) => b.block_type === BLOCK_TYPE.callout);
+    const quotes = blocks.filter((b) => b.block_type === BLOCK_TYPE.quote_container);
+    assert.equal(callouts.length, 1);
+    assert.equal(quotes.length, 1);
+  });
+});
+
+describe('buildQuoteContainerDescendants', () => {
+  it('builds correct descendant structure', () => {
+    const block = {
+      block_type: BLOCK_TYPE.quote_container,
+      quote_container: {},
+      _quote_children: [
+        { block_type: BLOCK_TYPE.text, text: { elements: [{ text_run: { content: 'Hello', text_element_style: {} } }], style: {} } },
+        { block_type: BLOCK_TYPE.text, text: { elements: [{ text_run: { content: 'World', text_element_style: {} } }], style: {} } },
+      ],
+    };
+    const { quoteId, descendants } = buildQuoteContainerDescendants(block);
+    assert.ok(quoteId, 'should return quoteId');
+    assert.equal(descendants.length, 3, 'should have 1 container + 2 children');
+    assert.equal(descendants[0].block_type, BLOCK_TYPE.quote_container);
+    assert.equal(descendants[0].children.length, 2);
+    assert.equal(descendants[1].block_type, BLOCK_TYPE.text);
+    assert.equal(descendants[2].block_type, BLOCK_TYPE.text);
+  });
+
+  it('handles empty children', () => {
+    const block = {
+      block_type: BLOCK_TYPE.quote_container,
+      quote_container: {},
+      _quote_children: [],
+    };
+    const { quoteId, descendants } = buildQuoteContainerDescendants(block);
+    assert.ok(quoteId);
+    assert.equal(descendants.length, 1, 'should have only the container');
+    assert.equal(descendants[0].children.length, 0);
   });
 });

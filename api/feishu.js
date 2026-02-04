@@ -7,19 +7,6 @@ import {
   inlineMarkdownToElements,
   BLOCK_TYPE,
 } from './feishu-md.js';
-import {
-  readManifest,
-  writeManifest,
-  hashFile,
-  sanitizeFilename,
-  ensurePosixPath,
-  fileExists,
-  deleteLocalFile,
-  ensureUniqueFilePathWithFs,
-  shouldSyncLocalPath,
-  buildConflictPath,
-  resolveFileType,
-} from './helpers.js';
 
 export const API_BASE = 'https://open.feishu.cn/open-apis';
 const DELETE_BATCH_SIZE = 100;
@@ -140,40 +127,12 @@ export async function fetchAllPaged(pathSuffix, token, query = {}, { pageSize = 
   return items;
 }
 
-export async function deleteRemoteDocument(documentId, token, fileType) {
-  const type = fileType || 'docx';
-  await apiDelete(`/drive/v1/files/${documentId}`, token, undefined, { type });
-}
-
 export async function fetchAllBlocks(documentId, token) {
   return fetchAllPaged(`/docx/v1/documents/${documentId}/blocks`, token, { document_revision_id: -1 });
 }
 
 export async function fetchWikiNodes(spaceId, token, parentNodeToken) {
   return fetchAllPaged(`/wiki/v2/spaces/${spaceId}/nodes`, token, { parent_node_token: parentNodeToken }, { pageSize: 50 });
-}
-
-export async function collectWikiDocNodes(spaceId, token, parentNodeToken, result) {
-  const nodes = await fetchWikiNodes(spaceId, token, parentNodeToken);
-  for (const node of nodes) {
-    const hasChild = node.has_child ?? node.hasChild;
-    const nodeToken = node.node_token || node.nodeToken;
-    const objType = node.obj_type || node.objType;
-    const objToken = node.obj_token || node.objToken;
-
-    if (objToken && (objType === 'docx' || objType === 'doc')) {
-      result.push({
-        nodeToken,
-        documentId: objToken,
-        title: node.title || node.name || '',
-        objType,
-      });
-    }
-
-    if (hasChild && nodeToken) {
-      await collectWikiDocNodes(spaceId, token, nodeToken, result);
-    }
-  }
 }
 
 export async function fetchDocumentMeta(documentId, token) {
@@ -336,6 +295,33 @@ export function buildCalloutDescendants(block) {
   return { calloutId, descendants };
 }
 
+export function buildQuoteContainerDescendants(block) {
+  const quoteId = tempId('quote');
+  const children = block._quote_children || [];
+  const descendants = [];
+  const childIds = [];
+
+  for (const child of children) {
+    const childId = tempId('qtxt');
+    childIds.push(childId);
+    descendants.push({
+      block_id: childId,
+      block_type: child.block_type || BLOCK_TYPE.text,
+      text: child.text || { elements: [{ text_run: { content: '', text_element_style: {} } }], style: {} },
+      children: [],
+    });
+  }
+
+  descendants.unshift({
+    block_id: quoteId,
+    block_type: BLOCK_TYPE.quote_container,
+    quote_container: {},
+    children: childIds,
+  });
+
+  return { quoteId, descendants };
+}
+
 async function createCalloutWithContent(documentId, token, block, index) {
   const { calloutId, descendants } = buildCalloutDescendants(block);
   await apiPost(
@@ -366,6 +352,18 @@ export async function appendBlocksWithTables(documentId, token, blocks) {
     if (block.block_type === BLOCK_TYPE.callout && block._callout_children) {
       await flushBuffer();
       index = await createCalloutWithContent(documentId, token, block, index);
+      continue;
+    }
+    if (block.block_type === BLOCK_TYPE.quote_container && block._quote_children) {
+      await flushBuffer();
+      const { quoteId, descendants } = buildQuoteContainerDescendants(block);
+      await apiPost(
+        `/docx/v1/documents/${documentId}/blocks/${documentId}/descendant`,
+        token,
+        { children_id: [quoteId], descendants },
+        { document_revision_id: -1 },
+      );
+      index += 1;
       continue;
     }
     buffer.push(block);
@@ -437,458 +435,3 @@ export async function uploadMarkdownToDocument(documentId, token, markdown) {
   await appendBlocksWithTables(documentId, token, blocks);
 }
 
-export async function createDocumentFromMarkdown(spaceId, token, markdown) {
-  const { title, blocks } = markdownToBlocks(markdown);
-  const { documentId, usedTitle } = await createDocument(token, title);
-
-  const contentBlocks = usedTitle
-    ? blocks
-    : [
-        {
-          block_type: BLOCK_TYPE.heading1,
-          heading1: {
-            style: {},
-            elements: [{ text_run: { content: title, text_element_style: {} } }],
-          },
-        },
-        ...blocks,
-      ];
-
-  await appendBlocksWithTables(documentId, token, contentBlocks);
-  await addDocToWiki(spaceId, token, documentId);
-  return documentId;
-}
-
-export async function subscribeToDocEvents(fileToken, token, fileType, eventType) {
-  if (!fileToken) {
-    throw new Error('Missing file token for event subscription.');
-  }
-  if (!fileType) {
-    throw new Error('Missing file type for event subscription.');
-  }
-  const query = { file_type: String(fileType).toLowerCase() };
-  if (eventType) {
-    query.event_type = eventType;
-  }
-  await apiPost(`/drive/v1/files/${fileToken}/subscribe`, token, undefined, query);
-}
-
-export function createChangeProcessor({
-  token,
-  spaceId,
-  rootDir,
-  debounceMs,
-  dedupeWindowMs,
-  logEvents,
-  fileTypes,
-  runFullSync,
-  subscribeToDocument,
-  manifestName,
-}) {
-  let processing = false;
-  let queued = false;
-  let debounceTimer = null;
-  let lastProcessCompletedAt = 0;
-  const recentEvents = new Map();
-  const pendingRemote = new Map();
-  const pendingLocal = new Set();
-
-  const pruneRecent = (now) => {
-    for (const [eventId, ts] of recentEvents.entries()) {
-      if (now - ts > dedupeWindowMs) {
-        recentEvents.delete(eventId);
-      }
-    }
-  };
-
-  const seenEvent = (eventId) => {
-    if (!eventId) return false;
-    const now = Date.now();
-    pruneRecent(now);
-    if (recentEvents.has(eventId)) return true;
-    recentEvents.set(eventId, now);
-    return false;
-  };
-
-  const scheduleProcess = () => {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      processPending().catch((err) => {
-        console.error(`[realtime-sync] process failed: ${err.message || err}`);
-      });
-    }, debounceMs);
-  };
-
-  const handleEvent = (eventType, data) => {
-    const eventId = data.event_id || data.eventId || '';
-    if (eventId && seenEvent(eventId)) return;
-
-    const fileTypeRaw = data.file_type || data.fileType || '';
-    const fileType = String(fileTypeRaw).toLowerCase();
-    if (fileType && fileTypes && !fileTypes.has(fileType)) {
-      if (logEvents) {
-        console.log(
-          `[realtime-sync] ignored ${eventType} for file type ${fileType || 'unknown'}`
-        );
-      }
-      return;
-    }
-
-    const fileToken =
-      data.file_token || data.fileToken || data.resource_id || data.resourceId || '';
-    if (!fileToken) {
-      if (logEvents) {
-        console.log(`[realtime-sync] ignored ${eventType} without file token`);
-      }
-      return;
-    }
-
-    if (logEvents) {
-      const eventInfo = [eventType, fileType, fileToken].filter(Boolean).join(' | ');
-      console.log(`[realtime-sync] event ${eventInfo}`);
-    }
-
-    pendingRemote.set(fileToken, eventType);
-    scheduleProcess();
-  };
-
-  const handleLocalChange = (detail) => {
-    const relPath = detail ? ensurePosixPath(detail) : '';
-    if (relPath && !shouldSyncLocalPath(relPath, manifestName)) return;
-    if (logEvents) {
-      console.log(`[realtime-sync] local change ${relPath || ''}`.trim());
-    }
-    if (relPath) {
-      pendingLocal.add(relPath);
-    } else {
-      pendingLocal.add('local');
-    }
-    scheduleProcess();
-  };
-
-  const processPending = async () => {
-    if (processing) {
-      queued = true;
-      return;
-    }
-    processing = true;
-    const remoteBatch = new Map(pendingRemote);
-    const localBatch = new Set(pendingLocal);
-    pendingRemote.clear();
-    pendingLocal.clear();
-
-    try {
-      await processChanges(remoteBatch, localBatch);
-    } finally {
-      processing = false;
-      lastProcessCompletedAt = Date.now();
-      if (queued || pendingRemote.size || pendingLocal.size) {
-        queued = false;
-        setTimeout(() => {
-          processPending().catch((err) => {
-            console.error(`[realtime-sync] process failed: ${err.message || err}`);
-          });
-        }, 0);
-      }
-    }
-  };
-
-  const processChanges = async (remoteBatch, localBatch) => {
-    if (localBatch.has('local')) {
-      localBatch.delete('local');
-      if (typeof runFullSync === 'function') {
-        await runFullSync('local-change');
-      }
-      return;
-    }
-    const manifest = await readManifest(rootDir, manifestName);
-    const manifestDocs = manifest.docs || {};
-    let manifestDirty = false;
-
-    const fileToDoc = new Map();
-    const usedPaths = new Set();
-    for (const [docId, entry] of Object.entries(manifestDocs)) {
-      if (entry?.file) {
-        fileToDoc.set(entry.file, docId);
-        usedPaths.add(entry.file);
-      }
-    }
-
-    for (const [docId, eventType] of remoteBatch.entries()) {
-      if (eventType === 'drive.file.trashed_v1') {
-        const entry = manifestDocs[docId];
-        if (entry?.file) {
-          localBatch.delete(entry.file);
-          const fileAbs = path.join(rootDir, entry.file);
-          await deleteLocalFile(fileAbs);
-          manifestDirty = true;
-        }
-        if (manifestDocs[docId]) {
-          delete manifestDocs[docId];
-          manifestDirty = true;
-        }
-        continue;
-      }
-
-      let meta;
-      try {
-        meta = await fetchDocumentMeta(docId, token);
-      } catch (err) {
-        console.warn(
-          `[realtime-sync] failed to fetch meta for ${docId}: ${err.message || err}`
-        );
-        continue;
-      }
-
-      const entry = manifestDocs[docId];
-      const title = meta.title || entry?.title || '';
-      const revisionId = meta.revision_id ?? meta.revisionId ?? entry?.revisionId ?? null;
-      const baseName = sanitizeFilename(title) || docId;
-      const desiredName = `${baseName}.md`;
-      let fileRel = entry?.file;
-      const renameCandidates = new Set(usedPaths);
-      if (fileRel) {
-        renameCandidates.delete(fileRel);
-      }
-      const desiredRel = await ensureUniqueFilePathWithFs(
-        rootDir,
-        desiredName,
-        renameCandidates
-      );
-      if (!fileRel) {
-        fileRel = desiredRel;
-      } else if (desiredRel && desiredRel !== fileRel) {
-        const oldRel = fileRel;
-        const oldAbs = path.join(rootDir, oldRel);
-        const newAbs = path.join(rootDir, desiredRel);
-        if (await fileExists(oldAbs)) {
-          await fs.rename(oldAbs, newAbs);
-        }
-        fileRel = desiredRel;
-        usedPaths.delete(oldRel);
-        usedPaths.add(fileRel);
-        fileToDoc.delete(oldRel);
-        fileToDoc.set(fileRel, docId);
-        localBatch.delete(oldRel);
-        if (entry) {
-          entry.file = fileRel;
-        }
-        manifestDirty = true;
-      }
-      localBatch.delete(fileRel);
-
-      const fileAbs = path.join(rootDir, fileRel);
-      let localHash = null;
-      let localExists = false;
-      if (await fileExists(fileAbs)) {
-        localExists = true;
-        localHash = await hashFile(fileAbs);
-      }
-
-      const localChanged =
-        entry?.hash && localHash && entry.hash !== localHash;
-      const remoteChanged =
-        entry?.revisionId && revisionId && entry.revisionId !== revisionId;
-
-      if (!entry || !localExists) {
-        const hash = await downloadDocumentToFile(
-          docId,
-          token,
-          { document_id: docId, revision_id: revisionId, title },
-          fileAbs
-        );
-        manifestDocs[docId] = {
-          file: fileRel,
-          revisionId,
-          title,
-          fileType: resolveFileType({ fileType: entry?.fileType }),
-          hash,
-        };
-        usedPaths.add(fileRel);
-        manifestDirty = true;
-        if (typeof subscribeToDocument === 'function') {
-          await subscribeToDocument(docId, resolveFileType(null, manifestDocs[docId]));
-        }
-        continue;
-      }
-
-      if (remoteChanged && localChanged) {
-        const conflictRel = buildConflictPath(fileRel);
-        const conflictAbs = path.join(rootDir, conflictRel);
-        await downloadDocumentToFile(
-          docId,
-          token,
-          { document_id: docId, revision_id: revisionId, title },
-          conflictAbs
-        );
-        continue;
-      }
-
-      if (remoteChanged && !localChanged) {
-        const hash = await downloadDocumentToFile(
-          docId,
-          token,
-          { document_id: docId, revision_id: revisionId, title },
-          fileAbs
-        );
-        manifestDocs[docId] = {
-          ...entry,
-          file: fileRel,
-          revisionId,
-          title,
-          fileType: resolveFileType({ fileType: entry?.fileType }),
-          hash,
-        };
-        manifestDirty = true;
-        continue;
-      }
-
-      if (title && entry?.title !== title) {
-        manifestDocs[docId] = {
-          ...entry,
-          title,
-        };
-        manifestDirty = true;
-      }
-    }
-
-    for (const fileRel of Array.from(localBatch)) {
-      if (fileRel === 'local') continue;
-      const docId = fileToDoc.get(fileRel);
-      const fileAbs = path.join(rootDir, fileRel);
-      const exists = await fileExists(fileAbs);
-
-      if (!exists) {
-        if (docId) {
-          const entry = manifestDocs[docId];
-          await deleteRemoteDocument(docId, token, resolveFileType(null, entry));
-          delete manifestDocs[docId];
-          manifestDirty = true;
-        }
-        continue;
-      }
-
-      const hash = await hashFile(fileAbs);
-      if (docId) {
-        const entry = manifestDocs[docId];
-        if (entry?.hash && entry.hash === hash) continue;
-        const markdown = await fs.readFile(fileAbs, 'utf8');
-        await uploadMarkdownToDocument(docId, token, markdown);
-        const meta = await fetchDocumentMeta(docId, token);
-        manifestDocs[docId] = {
-          ...entry,
-          file: fileRel,
-          revisionId: meta.revision_id ?? meta.revisionId ?? entry?.revisionId ?? null,
-          title: meta.title || entry?.title || '',
-          fileType: resolveFileType(null, entry),
-          hash,
-        };
-        manifestDirty = true;
-      } else {
-        const markdown = await fs.readFile(fileAbs, 'utf8');
-        const newDocId = await createDocumentFromMarkdown(spaceId, token, markdown);
-        const meta = await fetchDocumentMeta(newDocId, token);
-        manifestDocs[newDocId] = {
-          file: fileRel,
-          revisionId: meta.revision_id ?? meta.revisionId ?? null,
-          title: meta.title || '',
-          fileType: 'docx',
-          hash,
-        };
-        fileToDoc.set(fileRel, newDocId);
-        usedPaths.add(fileRel);
-        manifestDirty = true;
-        if (typeof subscribeToDocument === 'function') {
-          await subscribeToDocument(newDocId, 'docx');
-        }
-      }
-    }
-
-    if (manifestDirty) {
-      await writeManifest(rootDir, { spaceId, docs: manifestDocs }, manifestName);
-    }
-  };
-
-  return {
-    handleEvent,
-    handleLocalChange,
-    processPending,
-    isProcessing: () => processing,
-    getLastProcessCompletedAt: () => lastProcessCompletedAt,
-  };
-}
-
-export async function syncNewDocsFromWiki({
-  rootDir,
-  spaceId,
-  token,
-  logEvents,
-  subscribeToDocument,
-  manifestName,
-}) {
-  const manifest = await readManifest(rootDir, manifestName);
-  const manifestDocs = manifest.docs || {};
-  const existingDocIds = new Set(Object.keys(manifestDocs));
-  const usedPaths = new Set();
-  for (const entry of Object.values(manifestDocs)) {
-    if (entry?.file) usedPaths.add(entry.file);
-  }
-
-  const wikiDocs = [];
-  await collectWikiDocNodes(spaceId, token, undefined, wikiDocs);
-
-  let added = 0;
-  let manifestDirty = false;
-
-  for (const node of wikiDocs) {
-    const docId = node.documentId;
-    if (!docId || existingDocIds.has(docId)) continue;
-
-    let meta;
-    try {
-      meta = await fetchDocumentMeta(docId, token);
-    } catch (err) {
-      console.warn(`[realtime-sync] poll meta failed for ${docId}: ${err.message || err}`);
-      continue;
-    }
-
-    const title = meta.title || node.title || '';
-    const revisionId = meta.revision_id ?? meta.revisionId ?? null;
-    const baseName = sanitizeFilename(title) || docId;
-    const fileRel = await ensureUniqueFilePathWithFs(rootDir, `${baseName}.md`, usedPaths);
-    const fileAbs = path.join(rootDir, fileRel);
-
-    const hash = await downloadDocumentToFile(
-      docId,
-      token,
-      { document_id: docId, revision_id: revisionId, title },
-      fileAbs
-    );
-
-    manifestDocs[docId] = {
-      file: fileRel,
-      revisionId,
-      title,
-      fileType: resolveFileType({ fileType: node.objType }),
-      hash,
-    };
-    usedPaths.add(fileRel);
-    existingDocIds.add(docId);
-    manifestDirty = true;
-    added += 1;
-
-    if (typeof subscribeToDocument === 'function') {
-      await subscribeToDocument(docId, resolveFileType(null, manifestDocs[docId]));
-    }
-  }
-
-  if (manifestDirty) {
-    await writeManifest(rootDir, { spaceId, docs: manifestDocs }, manifestName);
-  }
-
-  if (logEvents) {
-    console.log(`[realtime-sync] poll complete (new docs: ${added})`);
-  }
-
-  return { added };
-}

@@ -1,8 +1,66 @@
 # Changelog
 
-## [Unreleased] - 2026-02-03
+## [1.0.1] - 2026-02-04
+
+### 文档
+
+**部署和项目说明**
+- 新增 `DEPLOYMENT.md` — AI 可执行的自动化部署指南，支持一键克隆项目、安装依赖、配置凭证、部署全局 Skill、OAuth 授权全流程
+- 新增 `docs/PROJECT-SCOPE.md` — 项目范围完整说明，明确区分项目文件、全局配置、排除文件（掌天瓶系统）的边界
 
 ### 新功能
+
+**文档权限管理** (`doc-permission`)
+- `npm run doc-permission -- get <URL>` — 查看文档当前分享权限设置
+- `npm run doc-permission -- set <URL...> --preset public|tenant|private|editable` — 批量设置权限（4 种预设方案）
+- `npm run doc-permission -- set <URL> --link-share <值> --external <值>` — 自定义权限字段
+- `npm run doc-permission -- add <URL> --member <ID> --perm view|edit|full_access` — 添加协作者
+- `npm run doc-permission -- list <URL>` — 列出文档协作者
+- 支持并行处理多个文档，支持 8 种权限字段自定义
+
+**上传验证**
+- `node scripts/verify.js <doc-id> <local-file.md>` — 比对飞书文档与本地源文件的内容一致性
+- 自动忽略已知格式差异（链接形式、列表编号、空行）
+- 输出 PASS/FAIL 及差异详情
+
+**Claude Code Skill 同步**
+- 新增 `.claude/skills/feishu-doc/SKILL.md` — 飞书文档操作的 Claude Code skill 定义
+- 包含批量上传工作流编排规则：授权检查 → 临时文件 → 并行上传 → 链接互联 → 验证
+
+### 修复
+
+**上传批次丢失问题** (`upload.js`)
+- 修复 flush 二分查找时后续批次被丢失的问题：当某批次失败触发二分查找时，原 `pending` 数组被覆盖，导致后续待上传批次无法访问
+- 修复方案：在遍历前将 `pending` 快照到局部变量 `toFlush`，防止二分查找覆盖原数组
+- 影响范围：当单个批次（50个块）上传失败且需要二分定位坏块时，原逻辑会丢失该批次之后的所有待上传内容
+
+### 代码质量
+
+**代码清理**
+- 清理 `api/feishu.js` 中约 460 行同步引擎遗留代码（文件从 ~933 行减少至 437 行）
+  - 删除函数：`deleteRemoteDocument`, `collectWikiDocNodes`, `createDocumentFromMarkdown`, `subscribeToDocEvents`, `createChangeProcessor`, `syncNewDocsFromWiki`
+- 清理 `api/helpers.js` 中约 250 行遗留工具函数（文件从 ~291 行减少至 41 行）
+  - 保留：`readToken`, `sanitizeFilename`, `expandHomeDir`, `extractDocumentId`
+  - 删除：`hashFile`, `readManifest`, `writeManifest`, `ensurePosixPath`, `resolveSyncFolder`, `pickAppCredentials`, `normalizeLoggerLevel`, `normalizeFileTypes`, `ensureUniqueFilePath`, `fileExists`, `deleteLocalFile`, `ensureUniqueFilePathWithFs`, `shouldSyncLocalPath`, `startLocalWatcher`, `buildConflictPath`, `resolveFileType`
+- 代码规模：核心代码从 ~4,100 行减少至 ~3,352 行（-18%）
+- 补充 `package.json` 缺失的 npm scripts：`read`, `verify`
+- 补充 `README.md` 目录树中缺失的 `scripts/verify.js`
+
+## 2026-02-03
+
+### 新功能
+
+**文档美化** (`beautify`)
+- `npm run beautify -- <文档URL>` — 读取飞书文档，输出 Markdown 到 stdout（供 AI 美化）
+- `npm run beautify -- <文档URL> --from <beautified.md>` — 将美化后的 Markdown 上传为新文档
+- `npm run beautify -- <文档URL> --from <beautified.md> --replace` — 覆盖原文档
+- 支持读取 → 美化 → 回写的完整工作流
+
+**Callout 高亮块**
+- 上传支持 `> [!NOTE]` / `> [!TIP]` / `> [!WARNING]` / `> [!IMPORTANT]` 语法
+- 下载时飞书 callout block 自动转为对应的 GitHub 风格 callout 语法
+- Emoji 自动映射：💡→TIP、✏️→NOTE、⚠️→WARNING、❗→IMPORTANT
+- 通过 Batch Descendants API（`/blocks/{id}/descendant`）上传，支持多行内容
 
 **多维表格（Bitable）操作**
 - `npm run bitable-fields <app_token> <table_id>` — 查看表格字段结构，支持 `--json` 输出
@@ -28,6 +86,7 @@
 
 ### 修复
 
+- **引用块上传失败**: 修复上传 Markdown 时 blockquote（`>` 引用块）失败的问题 — `quote`（type 15）不是飞书 docx API 合法的顶层块类型，改用 `quote_container`（type 34）+ descendant API 结构，通过 `/blocks/{id}/descendant` API 插入子块。
 - **表格内容丢失**: 表格 cell 内的 Markdown 行内格式（链接、粗体、斜体、代码等）现在会被正确解析并上传。之前 `[链接文本](url)` 在表格中会显示为纯文本，现在显示为可点击的链接。
 - **多余空行**: Markdown 空行不再生成空 paragraph block。之前上传后飞书文档中会出现大量多余的空白段落，现在空行仅作为段落分隔符处理。
 - **大表格上传失败**: 移除了错误的 `MAX_BATCH_DESCENDANT_ROWS = 9` 行数限制。之前 >9 行的表格会回退到 Children API + 逐 cell 填充，而 Children API 对大表格返回 `invalid param`。现在所有表格统一使用 Batch Descendants API（经测试支持 50+ 行）。

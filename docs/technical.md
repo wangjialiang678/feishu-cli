@@ -6,7 +6,7 @@ feishu-cli 是一个纯 CLI 工具，以用户身份（OAuth 2.0 user_access_tok
 
 **技术栈**：Node.js 18+（ESM）、全局 fetch API、`@larksuiteoapi/node-sdk`（仅用于 OAuth token 交换）
 
-**代码规模**：约 2,700 行核心代码 + 460 行测试
+**代码规模**：约 3,352 行核心代码 + 680 行测试
 
 ---
 
@@ -16,7 +16,8 @@ feishu-cli 是一个纯 CLI 工具，以用户身份（OAuth 2.0 user_access_tok
 ┌─────────────────────────────────────────────┐
 │                 CLI Scripts                  │
 │  auth │ upload │ download │ read │ search   │
-│  fetch │ list │ convert                      │
+│  fetch │ list │ convert │ beautify           │
+│  bitable-* │ doc-permission │ verify         │
 └──────────────────┬──────────────────────────┘
                    │
 ┌──────────────────▼──────────────────────────┐
@@ -30,7 +31,7 @@ feishu-cli 是一个纯 CLI 工具，以用户身份（OAuth 2.0 user_access_tok
 └─────────────────────────────────────────────┘
 ```
 
-### api/feishu.js（~910 行）
+### api/feishu.js（~437 行）
 
 核心 API 封装层，负责所有飞书 REST API 调用。
 
@@ -45,12 +46,13 @@ feishu-cli 是一个纯 CLI 工具，以用户身份（OAuth 2.0 user_access_tok
 | `fetchDocumentMeta(documentId, token)` | 获取文档元数据 |
 | `appendBlocksWithTables(documentId, token, blocks)` | 上传 Block（含表格 Batch Descendants） |
 | `uploadMarkdownToDocument(documentId, token, markdown)` | 清空文档 + 上传新内容 |
-| `createDocumentFromMarkdown(spaceId, token, markdown)` | 创建文档并加入 Wiki |
 | `downloadDocumentToFile(documentId, token, metadata, filePath)` | 下载文档为 Markdown 文件 |
 | `fetchWikiNodes(spaceId, token)` | 递归列出 Wiki 文档树（基于通用 `fetchAllPaged`） |
 | `tempId(prefix)` | 生成表格临时 block ID |
 | `buildTableDescendants(rows, colSize, columnWidth)` | 构建表格 Batch Descendants 数组 |
 | `calculateColumnWidths(rows, colSize)` | 根据内容计算列宽（CJK 感知） |
+| `buildCalloutDescendants(block)` | 构建 callout Batch Descendants 数组 |
+| `buildQuoteContainerDescendants(block)` | 构建 quote_container Batch Descendants 数组 |
 | `stripMarkdownForWidth(text)` / `getDisplayWidth(text)` | 列宽计算辅助函数 |
 
 **限流重试策略**：
@@ -68,8 +70,10 @@ HTTP 429 → 检查 Retry-After 头
 - 普通 Block（段落/标题/列表等）：每批 50 个，通过 `/blocks/{id}/children` 追加
 - 批量失败时使用二分法定位坏 Block，跳过后继续
 - 表格：通过 Batch Descendants API 一次创建完整结构（见下方表格处理详情）
+- Callout：通过 Batch Descendants API 创建 callout + 子节点
+- Quote Container：通过 Batch Descendants API 创建 quote_container + 子节点
 
-### api/feishu-md.js（~1,100 行）
+### api/feishu-md.js（~1,240 行）
 
 Markdown 与飞书 Block JSON 的双向转换引擎。
 
@@ -92,8 +96,9 @@ Markdown 与飞书 Block JSON 的双向转换引擎。
 | bullet | 12 | 无序列表 |
 | ordered | 13 | 有序列表 |
 | code | 14 | 代码块 |
-| quote | 15 | 引用 |
+| quote | 15 | 引用（旧版，不作为顶层块使用） |
 | todo | 17 | 待办事项 |
+| callout | 19 | 高亮块（[!NOTE]/[!TIP]/[!WARNING]/[!IMPORTANT]） |
 | divider | 22 | 分割线 |
 | image | 27 | 图片（仅下载方向支持） |
 | table | 31 | 表格 |
@@ -155,20 +160,18 @@ Markdown 与飞书 Block JSON 的双向转换引擎。
 - [表格行追加 API 调研](research/table-row-append-2026-02-03.md) — InsertTableRow API、9 行限制适用范围
 - [batch_update API 调研](research/batch-update-cells-2026-02-03.md) — 确认无法批量写入 cell 内容
 
-### api/helpers.js（~290 行）
+### api/helpers.js（~41 行）
 
-工具函数集，提供 Token I/O、文件操作、路径处理、文档 ID 解析。
+轻量工具函数集，提供 Token I/O、路径处理、文档 ID 解析。
 
-**关键函数**：
+**导出函数**：
 
 | 函数 | 用途 |
 |------|------|
 | `readToken(tokenPath)` | 从文件读取 OAuth token |
-| `hashFile(filePath)` | SHA256 文件内容哈希 |
 | `sanitizeFilename(name)` | 文档标题 → 安全文件名 |
-| `pickAppCredentials(config)` | 从 config 或环境变量获取应用凭证 |
-| `extractDocumentId(input)` | 从 URL 或纯 ID 提取文档 ID（共享函数，download/fetch/read 复用） |
 | `expandHomeDir(path)` | `~` 路径展开（使用 `os.homedir()`） |
+| `extractDocumentId(input)` | 从 URL 或纯 ID 提取文档 ID（共享函数，download/fetch/read 复用） |
 
 ### config.js（~60 行）
 
@@ -212,6 +215,7 @@ Markdown 与飞书 Block JSON 的双向转换引擎。
 | `docs:doc` | 读写旧版文档 |
 | `drive:drive` | 读写云空间文件 |
 | `wiki:wiki` | 读写知识库 |
+| `bitable:bitable` | 读写多维表格 |
 | `offline_access` | 获取 refresh_token |
 
 **Token 刷新**：
@@ -241,6 +245,10 @@ Markdown 与飞书 Block JSON 的双向转换引擎。
 | GET | `/wiki/v2/spaces/{spaceId}/nodes` | 列出 Wiki 节点（分页） |
 | POST | `/wiki/v2/spaces/{spaceId}/nodes/move_docs_to_wiki` | 文档移入 Wiki |
 | POST | `/suite/docs-api/search/object` | 搜索文档 |
+| GET | `/drive/v1/permissions/{token}/public` | 查看文档公开权限 |
+| PATCH | `/drive/v1/permissions/{token}/public` | 设置文档公开权限 |
+| GET | `/drive/v1/permissions/{token}/members` | 列出文档协作者 |
+| POST | `/drive/v1/permissions/{token}/members` | 添加文档协作者 |
 
 ### API 调用约定
 
@@ -258,6 +266,7 @@ Markdown 与飞书 Block JSON 的双向转换引擎。
 | Block 嵌套创建（descendant） | 9 行/次 | 表格 Batch Descendants |
 | Block 删除 | 100 个/请求 | `DELETE_BATCH_SIZE = 100` |
 | 空表格创建 | 无行数限制 | >9 行表格使用此方式 + 逐 cell 填充 |
+| Callout/Quote 嵌套创建 | 无限制 | 通过 Batch Descendants API 创建 |
 
 ---
 
@@ -294,7 +303,7 @@ Markdown 中的空行是段落分隔符，不生成 Block。调研确认所有�
 
 ## 测试
 
-使用 Node.js 内置 `node:test` 框架，44 个测试用例（约 460 行）。
+使用 Node.js 内置 `node:test` 框架，62 个测试用例（约 680 行）。
 
 **测试范围**：
 
@@ -306,6 +315,11 @@ Markdown 中的空行是段落分隔符，不生成 Block。调研确认所有�
 | inlineMarkdownToElements | 行内格式解析（粗体/斜体/代码/链接/删除线） |
 | inlineMarkdownToElements: complex cases | 复合行内格式（相邻格式、特殊 URL、空字符串） |
 | extractDocumentId | 文档 ID 解析（完整 URL、query/hash、尾部斜杠、纯 ID、空值） |
+| callout: feishuToMarkdown | Callout Block → [!TYPE] 语法转换 |
+| callout: markdownToBlocks | [!NOTE]/[!WARNING] 等解析、与普通引用区分 |
+| callout: markdownToFeishu roundtrip | Callout 往返一致性、树结构验证 |
+| quote_container: markdownToBlocks | 引用块解析（单行/多行/空/行内格式/与 callout 区分） |
+| buildQuoteContainerDescendants | Quote Descendants 结构构建 |
 | Roundtrip | Markdown → Block → Feishu → Markdown 往返一致性 |
 | 边界情况 | null/undefined 输入、空文档、特殊字符 |
 

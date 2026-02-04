@@ -13,6 +13,7 @@
 - **多维表格** — 查看字段、导出 CSV、从 CSV 导入（Bitable API）
 - **美化** — 读取飞书文档 → AI 美化 Markdown → 回写（新建或覆盖原文档）
 - **高亮块** — 支持 `> [!NOTE]` / `> [!TIP]` / `> [!WARNING]` / `> [!IMPORTANT]` 语法
+- **权限管理** — 查看/设置文档分享权限、管理协作者（支持批量操作和预设方案）
 - **离线转换** — Markdown ↔ 飞书 Block JSON 互转
 - **列出文档** — 列出 Wiki 空间文档树
 - **查看元数据** — 获取文档 ID、标题、版本号
@@ -239,6 +240,48 @@ node scripts/beautify.js <原文档URL> --from beautified.md
 node scripts/beautify.js <原文档URL> --from beautified.md --replace
 ```
 
+### 权限管理
+
+查看文档当前权限：
+```bash
+npm run doc-permission -- get <飞书文档URL或ID>
+```
+
+批量设置权限（使用预设）：
+```bash
+# 预设方案: public（公开可读）、tenant（组织内可读）、private（仅协作者）、editable（公开可编辑）
+npm run doc-permission -- set <URL1> <URL2> ... --preset public
+```
+
+自定义权限字段：
+```bash
+npm run doc-permission -- set <URL> --link-share tenant_readable --external closed
+```
+
+添加协作者：
+```bash
+npm run doc-permission -- add <URL> --member user@example.com --member-type email --perm edit
+```
+
+列出协作者：
+```bash
+npm run doc-permission -- list <URL>
+```
+
+查看完整帮助：
+```bash
+npm run doc-permission -- --help
+```
+
+支持的预设方案：
+
+| 预设 | 说明 |
+|------|------|
+| `public` | 互联网任何人可通过链接阅读 |
+| `tenant` | 仅组织内成员可通过链接阅读 |
+| `private` | 仅协作者可访问（关闭链接分享） |
+| `editable` | 互联网任何人可通过链接编辑 |
+
 ### 多维表格（Bitable）操作
 
 查看表格字段：
@@ -262,6 +305,14 @@ npm run bitable-write -- <app_token> <table_id> data.csv
 - 导出 CSV 通过 stdout 输出，可直接重定向到文件
 - 导入时 CSV 首行为表头（需与字段名匹配），每批 500 条
 - 需要额外权限：`bitable:bitable`（在飞书开放平台添加）
+
+### 验证上传结果
+
+```bash
+node scripts/verify.js <飞书文档URL或ID> <本地MD文件路径>
+```
+
+比对飞书文档与本地源文件的内容一致性。自动忽略已知格式差异（链接形式、列表编号、空行），输出 PASS/FAIL 及差异详情。
 
 ### 离线格式转换
 
@@ -340,6 +391,8 @@ feishu-cli/
 │   ├── fetch.js           # 查看文档元数据 + Block JSON
 │   ├── list.js            # 列出 Wiki 空间文档
 │   ├── beautify.js        # 美化飞书文档（读取/回写）
+│   ├── doc-permission.js  # 文档权限管理（查看/设置/协作者）
+│   ├── verify.js          # 上传验证（比对飞书文档与本地源文件）
 │   ├── convert.js         # 离线 Markdown ↔ Block JSON 转换
 │   ├── bitable-fields.js  # 查看多维表格字段结构
 │   ├── bitable-read.js    # 导出多维表格记录为 CSV/JSON
@@ -357,7 +410,24 @@ feishu-cli/
 
 ## 在新电脑上部署
 
-### 步骤
+### 🤖 自动化部署（推荐）
+
+如果使用 Claude Code，可以一键完成全部部署流程：
+
+```
+帮我下载 GitHub 项目并完成自动部署
+```
+
+Claude Code 会按照 [DEPLOYMENT.md](DEPLOYMENT.md) 自动执行：
+- ✅ 克隆项目 + 安装依赖
+- ✅ 配置飞书应用凭证
+- ✅ 部署全局 feishu-doc Skill
+- ✅ 运行 OAuth 授权
+- ✅ 验证部署成功
+
+详细部署流程和错误处理见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
+### 手动部署步骤
 
 1. 克隆仓库：
    ```bash
@@ -405,7 +475,7 @@ feishu-cli/
 ````markdown
 ---
 name: feishu-doc
-description: 飞书文档 CLI 工具。上传本地 Markdown 到飞书文档、读取/下载/美化飞书文档。当用户提到"飞书"、"feishu"、"lark"、读取/上传/下载/美化飞书文档时自动触发。
+description: 飞书文档 CLI 工具。上传本地 Markdown 到飞书文档、读取/下载/美化飞书文档、管理文档权限。当用户提到"飞书"、"feishu"、"lark"、读取/上传/下载/美化飞书文档、修改飞书权限时自动触发。
 ---
 
 # 飞书文档 CLI (feishu-cli)
@@ -501,6 +571,27 @@ cd ~/projects/feishu-cli && node scripts/search.js <关键词> [--type docx|doc|
 
 按关键词搜索用户有权限访问的飞书文档，返回标题、类型和 URL。
 
+### 权限管理
+
+```bash
+# 查看文档权限
+cd ~/projects/feishu-cli && node scripts/doc-permission.js get <飞书文档URL或ID>
+
+# 批量设为公开可读（预设: public | tenant | private | editable）
+cd ~/projects/feishu-cli && node scripts/doc-permission.js set <URL1> <URL2> ... --preset public
+
+# 自定义权限
+cd ~/projects/feishu-cli && node scripts/doc-permission.js set <URL> --link-share tenant_readable --external closed
+
+# 添加协作者
+cd ~/projects/feishu-cli && node scripts/doc-permission.js add <URL> --member user@example.com --member-type email --perm edit
+
+# 列出协作者
+cd ~/projects/feishu-cli && node scripts/doc-permission.js list <URL>
+```
+
+查看/设置文档分享权限、管理协作者。支持批量操作和 4 种预设方案（public/tenant/private/editable）。
+
 ### 多维表格操作
 
 ```bash
@@ -544,6 +635,10 @@ cd ~/projects/feishu-cli && npm run fetch -- <飞书文档URL或ID>
 - "帮我美化这个飞书文档 https://feishu.cn/docx/xxx"（使用 beautify.js）
 - "把这个飞书文档重新排版"（使用 beautify.js）
 - "优化这个飞书文档的结构"（使用 beautify.js）
+- "把这些飞书文档设为公开可读"（使用 doc-permission.js --preset public）
+- "查看这个飞书文档的权限"（使用 doc-permission.js get）
+- "把这个文档的链接分享关掉"（使用 doc-permission.js --preset private）
+- "添加 xxx 为这个文档的编辑者"（使用 doc-permission.js add）
 - "导出这个多维表格到 CSV"（使用 bitable-read）
 - "把这个 CSV 导入到飞书多维表格"（使用 bitable-write）
 - "看一下这个多维表格有哪些字段"（使用 bitable-fields）
@@ -582,6 +677,8 @@ npm test
 
 ## 相关文档
 
+- [自动化部署指南](DEPLOYMENT.md) — AI 可执行的一键部署流程
+- [项目范围说明](docs/PROJECT-SCOPE.md) — 项目文件组成、全局配置、部署清单
 - [技术架构文档](docs/technical.md) — API 集成、格式转换引擎、错误处理策略
 - [与 FeishuFS 对比](docs/comparison-with-feishufs.md) — 两个项目的定位与方案差异
 

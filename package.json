@@ -1,6 +1,6 @@
 {
   "name": "feishu-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "飞书文档 CLI 工具 — 以用户身份上传/下载 Markdown ↔ 飞书文档",
@@ -16,6 +16,9 @@
     "bitable-read": "node scripts/bitable-read.js",
     "bitable-write": "node scripts/bitable-write.js",
     "beautify": "node scripts/beautify.js",
+    "doc-permission": "node scripts/doc-permission.js",
+    "read": "node scripts/read.js",
+    "verify": "node scripts/verify.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
