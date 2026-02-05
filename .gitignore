@@ -3,6 +3,7 @@ AGENTS.md
 agent_docs/
 user-token.txt
 config.json
+codex-code-review.md
 wikid/
 .claude/
 .orchestrator/
