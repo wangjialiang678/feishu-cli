@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.3] - 2026-02-05
+
+### 新功能
+
+**多维表格批量更新** (`bitable-update`)
+- `npm run bitable-update -- <app_token> <table_id> <csv_file>` — 从 CSV 批量更新已有记录
+- CSV 必须包含 `record_id` 列，其余列为要更新的字段
+- 批量更新 500 条/批，支持进度条
+- 新增 `apiPut` API 方法，导出 `fetchChildrenCount`
+
+**批量创建文档并回写链接** (`batch-create-docs`)
+- `npm run batch-create-docs -- <app_token> <table_id> --name-field "姓名" --link-field "链接字段" --doc-title "报告-{姓名}"` — 从多维表格读取记录，为每条记录创建飞书文档，将文档 URL 回写到指定字段
+- 支持标题模板：`{字段名}` 占位符自动替换为记录值
+- 支持 Markdown 模板：`--template file.md` 预填文档内容
+- 幂等设计：已有链接的记录自动跳过，可安全重跑
+
+**追加链接到已有文档** (`append-link`)
+- `npm run append-link -- <文档URL或ID> <链接URL> [显示文本]` — 向已有飞书文档末尾追加可点击链接
+- 自动获取文档当前子块数量，追加到末尾
+
 ## [1.0.2] - 2026-02-05
 
 ### 安全修复

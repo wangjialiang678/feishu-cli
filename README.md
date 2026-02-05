@@ -10,7 +10,9 @@
 - **下载** — 飞书文档 → 本地 Markdown 文件
 - **读取** — 飞书文档内容直接输出为 Markdown（不写本地文件）
 - **搜索** — 按关键词搜索飞书文档，支持类型过滤
-- **多维表格** — 查看字段、导出 CSV、从 CSV 导入（Bitable API）
+- **多维表格** — 查看字段、导出 CSV、从 CSV 导入、批量更新已有记录（Bitable API）
+- **批量创建文档** — 从多维表格读取记录，批量创建飞书文档并回写链接
+- **追加链接** — 向已有飞书文档末尾追加链接
 - **美化** — 读取飞书文档 → AI 美化 Markdown → 回写（新建或覆盖原文档）
 - **高亮块** — 支持 `> [!NOTE]` / `> [!TIP]` / `> [!WARNING]` / `> [!IMPORTANT]` 语法
 - **权限管理** — 查看/设置文档分享权限、管理协作者（支持批量操作和预设方案）
@@ -301,6 +303,33 @@ npm run bitable-read -- <app_token> <table_id> --json
 npm run bitable-write -- <app_token> <table_id> data.csv
 ```
 
+从 CSV 批量更新已有记录：
+```bash
+npm run bitable-update -- <app_token> <table_id> update.csv
+```
+
+- CSV 必须包含 `record_id` 列，其余列为要更新的字段
+- `record_id` 可通过 `bitable-read --json` 导出获取
+
+批量创建文档并回写链接：
+```bash
+npm run batch-create-docs -- <app_token> <table_id> \
+  --name-field "姓名" \
+  --link-field "文档链接" \
+  --doc-title "学员报告-{姓名}"
+```
+
+- `--name-field` — 用于文档命名的字段（必填）
+- `--link-field` — 回写文档 URL 的目标字段（必填）
+- `--doc-title` — 标题模板，`{字段名}` 会被替换（可选）
+- `--template` — 文档初始内容的 Markdown 模板文件（可选）
+- 已有链接的记录会自动跳过（幂等，可安全重跑）
+
+向已有文档追加链接：
+```bash
+npm run append-link -- <文档URL或ID> <链接URL> [显示文本]
+```
+
 - `app_token` 和 `table_id` 可从多维表格 URL 中获取：`https://feishu.cn/base/<app_token>?table=<table_id>`
 - 导出 CSV 通过 stdout 输出，可直接重定向到文件
 - 导入时 CSV 首行为表头（需与字段名匹配），每批 500 条
@@ -397,6 +426,9 @@ feishu-cli/
 │   ├── bitable-fields.js  # 查看多维表格字段结构
 │   ├── bitable-read.js    # 导出多维表格记录为 CSV/JSON
 │   ├── bitable-write.js   # 从 CSV 导入记录到多维表格
+│   ├── bitable-update.js  # 从 CSV 批量更新已有记录
+│   ├── batch-create-docs.js # 批量创建文档并回写链接到多维表格
+│   ├── append-link.js     # 向已有文档追加链接
 │   └── cli-utils.js       # 共享 CLI 工具（spinner、progress bar）
 ├── test/
 │   └── feishu-md.test.js  # Markdown ↔ Block JSON 转换单元测试
@@ -598,9 +630,25 @@ cd ~/projects/feishu-cli && node scripts/doc-permission.js list <URL>
 cd ~/projects/feishu-cli && node scripts/bitable-fields.js <app_token> <table_id>
 cd ~/projects/feishu-cli && node scripts/bitable-read.js <app_token> <table_id> > output.csv
 cd ~/projects/feishu-cli && node scripts/bitable-write.js <app_token> <table_id> data.csv
+cd ~/projects/feishu-cli && node scripts/bitable-update.js <app_token> <table_id> update.csv
 ```
 
-查看字段结构、导出记录为 CSV、从 CSV 导入记录。app_token 和 table_id 从多维表格 URL 获取。
+查看字段结构、导出记录为 CSV、从 CSV 导入记录、从 CSV 批量更新已有记录。app_token 和 table_id 从多维表格 URL 获取。
+
+### 批量创建文档并回写链接
+
+```bash
+cd ~/projects/feishu-cli && node scripts/batch-create-docs.js <app_token> <table_id> \
+  --name-field "姓名" --link-field "文档链接" --doc-title "报告-{姓名}"
+```
+
+从多维表格读取记录，为每条记录创建飞书文档，将文档 URL 回写到指定字段。支持标题模板（`{字段名}` 替换）和 Markdown 模板（`--template`）。
+
+### 追加链接到已有文档
+
+```bash
+cd ~/projects/feishu-cli && node scripts/append-link.js <文档URL或ID> <链接URL> [显示文本]
+```
 
 ### 离线格式转换
 
@@ -641,7 +689,10 @@ cd ~/projects/feishu-cli && npm run fetch -- <飞书文档URL或ID>
 - "添加 xxx 为这个文档的编辑者"（使用 doc-permission.js add）
 - "导出这个多维表格到 CSV"（使用 bitable-read）
 - "把这个 CSV 导入到飞书多维表格"（使用 bitable-write）
+- "更新多维表格里的这些记录"（使用 bitable-update）
 - "看一下这个多维表格有哪些字段"（使用 bitable-fields）
+- "给多维表格里的每条记录创建一个飞书文档"（使用 batch-create-docs）
+- "在这个飞书文档末尾加一个链接"（使用 append-link）
 
 ## 注意事项
 

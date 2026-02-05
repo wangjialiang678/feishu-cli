@@ -101,6 +101,10 @@ export function apiDelete(pathSuffix, token, body, query) {
   return apiRequest('DELETE', pathSuffix, token, { query, body });
 }
 
+export function apiPut(pathSuffix, token, body, query) {
+  return apiRequest('PUT', pathSuffix, token, { query, body });
+}
+
 export async function fetchAllPaged(pathSuffix, token, query = {}, { pageSize = 100 } = {}) {
   const items = [];
   let pageToken;
@@ -402,7 +406,7 @@ export async function addDocToWiki(spaceId, token, documentId) {
   });
 }
 
-async function fetchChildrenCount(documentId, token) {
+export async function fetchChildrenCount(documentId, token) {
   const items = await fetchAllPaged(
     `/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
     token,
