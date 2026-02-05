@@ -3,6 +3,11 @@ import { readToken } from '../api/helpers.js';
 import { apiPost } from '../api/feishu.js';
 import { createSpinner } from './cli-utils.js';
 
+if (typeof fetch !== 'function') {
+  console.error('This CLI requires Node.js 18+ (global fetch).');
+  process.exit(1);
+}
+
 const ERR_SEARCH_NO_PERMISSION = '99991672';
 const ERR_SEARCH_NOT_ENABLED = '99991663';
 

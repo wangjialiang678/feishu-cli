@@ -5,6 +5,11 @@ import { apiPost, createDocument, buildTableDescendants, calculateColumnWidths, 
 import { markdownToBlocks, BLOCK_TYPE } from '../api/feishu-md.js';
 import { createSpinner, createProgressBar } from './cli-utils.js';
 
+if (typeof fetch !== 'function') {
+  console.error('This CLI requires Node.js 18+ (global fetch).');
+  process.exit(1);
+}
+
 const BATCH_SIZE = 50;
 
 function isRetryableError(err) {

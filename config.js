@@ -12,7 +12,15 @@ export async function readConfig() {
   try {
     raw = await fs.readFile(CONFIG_PATH, 'utf8');
   } catch (err) {
-    throw new Error(`Missing config.json. Create one at ${CONFIG_PATH}.`);
+    throw new Error(
+      `Missing config.json.\n\n` +
+      `  Quick setup:\n` +
+      `    1. cp config.example.json config.json\n` +
+      `    2. Edit config.json — fill in your Feishu App ID and App Secret\n` +
+      `    3. Run: npm run auth\n\n` +
+      `  Need a Feishu app first? See README.md "飞书应用配置" section.\n` +
+      `  Path: ${CONFIG_PATH}`
+    );
   }
 
   let data;
@@ -36,10 +44,18 @@ function getConfigValue(config, keyPath) {
   }, config);
 }
 
+const CONFIG_HINTS = {
+  'auth.clientId': 'Get it from https://open.feishu.cn/app → your app → Credentials (App ID)',
+  'auth.clientSecret': 'Get it from https://open.feishu.cn/app → your app → Credentials (App Secret)',
+  'tokenPath': 'Add "tokenPath": "./user-token.txt" to config.json',
+};
+
 export function requireConfigValue(config, keyPath) {
   const value = getConfigValue(config, keyPath);
   if (value === undefined || value === null || value === '') {
-    throw new Error(`Missing ${keyPath} in config.json.`);
+    const hint = CONFIG_HINTS[keyPath];
+    const msg = `Missing "${keyPath}" in config.json.`;
+    throw new Error(hint ? `${msg}\n  Hint: ${hint}` : msg);
   }
   return value;
 }

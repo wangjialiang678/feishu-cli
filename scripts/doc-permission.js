@@ -17,7 +17,12 @@
  */
 import { apiRequest } from '../api/feishu.js';
 import { readToken, extractDocumentId } from '../api/helpers.js';
-import { readConfig } from '../config.js';
+import { readConfig, requireConfigValue, resolvePath } from '../config.js';
+
+if (typeof fetch !== 'function') {
+  console.error('This CLI requires Node.js 18+ (global fetch).');
+  process.exit(1);
+}
 
 // ── 预设权限方案 ──────────────────────────────────────────────
 const PRESETS = {
@@ -160,7 +165,8 @@ function formatPermission(data) {
 
 // ── 主逻辑 ───────────────────────────────────────────────────
 const config = await readConfig();
-const token = await readToken(config.tokenPath || './user-token.txt');
+const tokenPath = resolvePath(requireConfigValue(config, 'tokenPath'));
+const token = await readToken(tokenPath);
 const { action, docs, flags } = parseArgs(process.argv);
 
 if (action === 'help') {

@@ -11,6 +11,11 @@ import {
 import { feishuToMarkdown, markdownToBlocks, BLOCK_TYPE } from '../api/feishu-md.js';
 import { createSpinner } from './cli-utils.js';
 
+if (typeof fetch !== 'function') {
+  console.error('This CLI requires Node.js 18+ (global fetch).');
+  process.exit(1);
+}
+
 function printUsage() {
   console.error(`Usage:
   Read mode (output Markdown to stdout):

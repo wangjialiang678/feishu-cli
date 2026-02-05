@@ -155,7 +155,7 @@ async function refreshUserAccessToken({ clientId, clientSecret, refreshToken }) 
 }
 
 async function writeTokenFile(tokenPath, accessToken) {
-  await fs.writeFile(tokenPath, `${accessToken}\n`, 'utf8');
+  await fs.writeFile(tokenPath, `${accessToken}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 
 function sleep(ms) {

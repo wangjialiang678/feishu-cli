@@ -2,6 +2,16 @@
 
 ## [1.0.2] - 2026-02-05
 
+### 安全修复
+
+- `auth.js`: token 文件写入时使用 `0o600` 权限，防止其他本地用户读取
+- `doc-permission.js`: 修复 tokenPath 使用 `resolvePath(requireConfigValue(...))` 保持一致性，避免不同工作目录下找不到 token 文件
+
+### 改进
+
+- `config.js`: 优化首次运行错误提示 — 缺少 `config.json` 时显示完整 setup 步骤，缺少配置项时给出获取链接提示
+- 补全所有脚本的 Node.js 18+ 检查（`search.js`, `beautify.js`, `upload.js`, `bitable-fields.js`, `bitable-read.js`, `bitable-write.js`, `doc-permission.js`）
+
 ### 新功能
 
 **Markdown 预检验证** (`upload.js`)
