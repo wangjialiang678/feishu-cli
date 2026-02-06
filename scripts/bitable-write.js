@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
 import { readToken } from '../api/helpers.js';
-import { apiPost } from '../api/feishu.js';
+import { apiPost, sleep, API_INTERVAL_MS } from '../api/feishu.js';
 import { createSpinner, createProgressBar } from './cli-utils.js';
 
 if (typeof fetch !== 'function') {
@@ -40,6 +40,7 @@ async function main() {
   let created = 0;
 
   for (let i = 0; i < dataRows.length; i += BATCH_SIZE) {
+    if (i > 0) await sleep(API_INTERVAL_MS);
     const batch = dataRows.slice(i, i + BATCH_SIZE);
     const records = batch.map(row => {
       const fields = {};

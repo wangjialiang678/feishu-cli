@@ -60,9 +60,10 @@ feishu-cli 是一个纯 CLI 工具，以用户身份（OAuth 2.0 user_access_tok
 ```
 HTTP 429 → 检查 Retry-After 头
   → 有：等待指定秒数（上限 60 秒）
-  → 无：指数退避 min(8000ms, 1000ms × 2^attempt)
+  → 无：指数退避 min(40000ms, 5000ms × 2^attempt)，即 5/10/20/40 秒
   → 所有延迟不超过 MAX_RETRY_DELAY_MS (60s)
   → 最多重试 5 次
+  → 批量操作间自动间隔 API_INTERVAL_MS (3s)
 ```
 
 **批量上传策略**：
@@ -274,8 +275,9 @@ Markdown 与飞书 Block JSON 的双向转换引擎。
 
 ### API 限流
 
-- HTTP 429 自动重试，指数退避，最多 5 次
-- 支持 `Retry-After` 响应头
+- HTTP 429 自动重试，指数退避（5/10/20/40s），最多 5 次
+- 支持 `Retry-After` 响应头（延迟上限 60s）
+- 批量操作间自动间隔 3 秒（`API_INTERVAL_MS`），避免触发飞书频控
 
 ### 坏 Block 定位
 

@@ -13,6 +13,13 @@ const DELETE_BATCH_SIZE = 100;
 const CREATE_BATCH_SIZE = 50;
 const MAX_RETRY_DELAY_MS = 60000;
 
+/** Default interval (ms) between operations in batch/multi-doc workflows to avoid rate limits. */
+export const API_INTERVAL_MS = 3000;
+
+export function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function apiRequest(method, pathSuffix, token, { query = {}, body } = {}) {
   const url = new URL(`${API_BASE}${pathSuffix}`);
   for (const [key, value] of Object.entries(query)) {
@@ -51,7 +58,7 @@ export async function apiRequest(method, pathSuffix, token, { query = {}, body }
       const retryAfter = Number(response.headers.get('retry-after'));
       let delayMs = Number.isFinite(retryAfter)
         ? retryAfter * 1000
-        : Math.min(8000, 1000 * 2 ** attempt);
+        : Math.min(40000, 5000 * 2 ** attempt);
       delayMs = Math.min(MAX_RETRY_DELAY_MS, delayMs);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       continue;

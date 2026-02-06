@@ -20,7 +20,7 @@
 import fs from 'node:fs/promises';
 import { readConfig, requireConfigValue, resolvePath } from '../config.js';
 import { readToken } from '../api/helpers.js';
-import { apiPut, fetchAllPaged, createDocument, uploadMarkdownToDocument } from '../api/feishu.js';
+import { apiPut, fetchAllPaged, createDocument, uploadMarkdownToDocument, sleep, API_INTERVAL_MS } from '../api/feishu.js';
 import { createSpinner, createProgressBar } from './cli-utils.js';
 
 if (typeof fetch !== 'function') {
@@ -92,6 +92,13 @@ async function main() {
   );
   spinner.succeed(`${records.length} records fetched`);
 
+  // Count actionable records to estimate time
+  const actionable = records.filter(r => !r.fields?.[linkField]).length;
+  if (actionable > 1) {
+    const estSec = actionable * Math.ceil(API_INTERVAL_MS / 1000);
+    console.log(`\n  为避免飞书 API 限流，每个文档创建间隔 ${API_INTERVAL_MS / 1000} 秒，预计耗时约 ${estSec} 秒\n`);
+  }
+
   const bar = createProgressBar(records.length, 'Creating docs');
   let created = 0;
   let skipped = 0;
@@ -115,6 +122,9 @@ async function main() {
     }
 
     const title = titleTemplate ? buildTitle(titleTemplate, rec) : name;
+
+    // Rate-limit: wait between document creations
+    if (created > 0) await sleep(API_INTERVAL_MS);
 
     // 创建文档
     const { documentId } = await createDocument(token, title);
